@@ -1,0 +1,28 @@
+{
+  "roots": [
+    {
+      "name": "work",
+      "path": "/path/to/repositories/work",
+      "authorNames": ["Your Name"],
+      "authorEmails": ["me@example.com"]
+    },
+    {
+      "name": "personal",
+      "path": "/path/to/repositories/personal",
+      "authorNames": ["Your Name"],
+      "authorEmails": ["me@example.com"]
+    }
+  ],
+  "outputDir": "./reports",
+  "report": {
+    "includeUncommittedDiff": true,
+    "maxDiffLines": 1200
+  },
+  "exclude": [
+    "node_modules", ".next", "dist", "build", "coverage",
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml"
+  ],
+  "telegram": {
+    "enabled": false
+  }
+}
