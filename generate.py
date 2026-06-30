@@ -7,7 +7,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib.config import load_config, parse_args
+from lib.config import load_config, parse_args, init_config, run_doctor
 from lib.collector import collect_reports
 from lib.missed_days import collect_missed_days, pick_missed_day
 from lib.renderer import write_report
@@ -47,6 +47,12 @@ def generate_reports_for_date(config, date, notify_after_generate=False):
 
 def main():
     args = parse_args()
+
+    if args.init:
+        return init_config()
+
+    if args.doctor:
+        return run_doctor()
 
     if args.no_notify:
         print(dim("[안내] --no-notify 는 더 이상 필요 없습니다. 기본 동작은 전송 안 함이며, 전송이 필요하면 --notify 를 사용하세요."))
