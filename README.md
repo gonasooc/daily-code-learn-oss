@@ -17,9 +17,38 @@
 - 터미널 출력에 ANSI 색상 적용 (성공/경고/에러 구분)
 - 텔레그램 봇을 통한 분석 결과 전송, 필요 시 리포트 전송 (선택)
 
+## 5분 Quickstart
+
+```bash
+git clone https://github.com/gonasooc/daily-code-learn-oss.git
+cd daily-code-learn-oss
+
+# 설정 파일 생성
+python3 generate.py --init
+
+# config/profiles.json에서 roots[].path, authorNames, authorEmails 수정
+
+# 설정 점검
+python3 generate.py --doctor
+
+# 오늘 기준 리포트 생성
+python3 generate.py
+```
+
+생성 결과는 `reports/{날짜}/{프로젝트명}.md`에 저장된다.
+
 ## 실행 방법
 
 ```bash
+# 버전 확인
+python3 generate.py --version
+
+# 설정 파일 생성
+python3 generate.py --init
+
+# 설정/환경 점검
+python3 generate.py --doctor
+
 # 오늘 기준 리포트 생성
 python3 generate.py
 
@@ -41,8 +70,8 @@ python3 generate.py --check-missed --days 14
 ## 초기 설정
 
 ```bash
-# 설정 파일 복사
-cp config/profiles.example.json config/profiles.json
+# 설정 파일 생성
+python3 generate.py --init
 ```
 
 `config/profiles.json`을 본인 환경에 맞게 수정:
@@ -68,6 +97,20 @@ cp config/profiles.example.json config/profiles.json
 ```
 
 `reports/`와 `config/profiles.json`은 로컬 생성/설정 파일이므로 public 저장소에서는 추적하지 않는다.
+
+설정이 맞는지 확인:
+
+```bash
+python3 generate.py --doctor
+```
+
+`--doctor`는 다음 항목을 점검한다:
+
+- `config/profiles.json` 존재 여부와 JSON 파싱 가능 여부
+- `roots[].path` 경로 존재 여부
+- root 안에서 발견되는 git 저장소 수
+- 예시 author 값이 그대로 남아 있는지 여부
+- 텔레그램 활성화 시 필요한 환경변수 존재 여부
 
 | 필드 | 설명 |
 |------|------|
@@ -232,6 +275,45 @@ python3 generate.py --notify
 | `---` | ——— 구분선 |
 | `<details>` | 펼쳐서 표시 |
 
+## Troubleshooting
+
+### 설정 파일이 없다고 나올 때
+
+```bash
+python3 generate.py --init
+```
+
+이후 `config/profiles.json`을 열어 `roots[].path`, `authorNames`, `authorEmails`를 실제 값으로 수정한다.
+
+### 리포트가 생성되지 않을 때
+
+```bash
+python3 generate.py --doctor
+```
+
+- root 경로가 실제 git 저장소들의 상위 디렉토리인지 확인한다.
+- `authorEmails`가 `git log`에 찍힌 이메일과 같은지 확인한다.
+- 해당 날짜에 커밋, staged, unstaged, untracked 변경 중 하나라도 있는지 확인한다.
+
+### diff가 너무 길거나 민감할 때
+
+`config/profiles.json`에서 diff 포함 여부와 최대 줄 수를 조정한다.
+
+```json
+{
+  "report": {
+    "includeUncommittedDiff": false,
+    "maxDiffLines": 600
+  }
+}
+```
+
+### 텔레그램 전송이 되지 않을 때
+
+- `.env`에 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`가 있는지 확인한다.
+- `config/profiles.json`에서 `telegram.enabled`가 `true`인지 확인한다.
+- 먼저 `python3 generate.py --doctor`로 누락된 환경변수를 확인한다.
+
 ## 파일 구조
 
 ```
@@ -255,6 +337,21 @@ daily-code-learn/
   .env                        # 실제 환경변수 (gitignored)
   reports/                    # 생성 결과 (gitignored)
 ```
+
+## Release
+
+현재 버전은 `0.1.0`이다.
+
+```bash
+python3 generate.py --version
+```
+
+릴리스 기준:
+
+- `python3 -m unittest discover -v` 통과
+- `CHANGELOG.md`에 버전별 변경 사항 기록
+- Git tag는 `vX.Y.Z` 형식 사용
+- GitHub Releases에는 설치/실행 방법, 주요 변경 사항, 알려진 제한을 함께 기록
 
 ## License
 
