@@ -384,12 +384,15 @@ class RendererTests(unittest.TestCase):
             report = _base_report(branch="before")
             file_path = write_report(report, "2026-06-28", output_dir)
             file_name = os.path.basename(file_path)
+            original_info = os.stat(file_path)
+            original_identity = (original_info.st_dev, original_info.st_ino)
             report["branch"] = "after"
             real_link = renderer.os.link
             swapped = False
+            replacement_identity = None
 
             def swap_before_backup(source, destination, *args, **kwargs):
-                nonlocal swapped
+                nonlocal swapped, replacement_identity
                 if (
                     not swapped
                     and source == file_name
@@ -399,6 +402,11 @@ class RendererTests(unittest.TestCase):
                     os.unlink(file_path)
                     with open(file_path, "w", encoding="utf-8") as file:
                         file.write("foreign content")
+                    replacement_info = os.stat(file_path)
+                    replacement_identity = (
+                        replacement_info.st_dev,
+                        replacement_info.st_ino,
+                    )
                 return real_link(source, destination, *args, **kwargs)
 
             with patch.object(
@@ -410,8 +418,95 @@ class RendererTests(unittest.TestCase):
 
             with open(file_path, "r", encoding="utf-8") as file:
                 self.assertEqual(file.read(), "foreign content")
+            self.assertTrue(swapped)
+            self.assertNotEqual(original_identity, replacement_identity)
             self.assertFalse(any(
                 name.startswith(".previous-report-")
+                for name in os.listdir(os.path.dirname(file_path))
+            ))
+
+    def test_replaceable_report_descriptor_pins_inode_until_context_exit(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            report = _base_report()
+            date = "2026-06-28"
+            file_path = write_report(report, date, output_dir)
+            directory_path = os.path.dirname(file_path)
+            file_name = os.path.basename(file_path)
+            directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            directory_fd = os.open(directory_path, directory_flags)
+
+            try:
+                with renderer._open_replaceable_report(
+                    directory_fd,
+                    file_name,
+                    file_path,
+                    render_markdown(report, date),
+                ) as existing_file_descriptor:
+                    original_info = os.fstat(existing_file_descriptor)
+                    original_identity = (
+                        original_info.st_dev,
+                        original_info.st_ino,
+                    )
+                    os.unlink(file_name, dir_fd=directory_fd)
+                    replacement_descriptor = os.open(
+                        file_name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=directory_fd,
+                    )
+                    os.close(replacement_descriptor)
+                    replacement_info = os.stat(
+                        file_name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    replacement_identity = (
+                        replacement_info.st_dev,
+                        replacement_info.st_ino,
+                    )
+
+                    self.assertNotEqual(
+                        original_identity,
+                        replacement_identity,
+                    )
+
+                with self.assertRaises(OSError) as closed_descriptor:
+                    os.fstat(existing_file_descriptor)
+                self.assertEqual(closed_descriptor.exception.errno, errno.EBADF)
+            finally:
+                os.close(directory_fd)
+
+    def test_replaceable_report_descriptor_closes_after_publication_error(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            report = _base_report(branch="before")
+            date = "2026-06-28"
+            file_path = write_report(report, date, output_dir)
+            report["branch"] = "after"
+            captured_descriptor = None
+
+            def fail_publication(*args):
+                nonlocal captured_descriptor
+                captured_descriptor = args[-1]
+                os.fstat(captured_descriptor)
+                raise RuntimeError("publication failed")
+
+            with patch.object(
+                renderer,
+                "_publish_temporary_report",
+                side_effect=fail_publication,
+            ), self.assertRaisesRegex(RuntimeError, "publication failed"):
+                write_report(report, date, output_dir)
+
+            self.assertIsNotNone(captured_descriptor)
+            with self.assertRaises(OSError) as closed_descriptor:
+                os.fstat(captured_descriptor)
+            self.assertEqual(closed_descriptor.exception.errno, errno.EBADF)
+            with open(file_path, "r", encoding="utf-8") as file:
+                content = file.read()
+            self.assertIn("- 브랜치: `before`", content)
+            self.assertNotIn("- 브랜치: `after`", content)
+            self.assertFalse(any(
+                name.startswith(".report-")
                 for name in os.listdir(os.path.dirname(file_path))
             ))
 

@@ -278,55 +278,56 @@ def write_report(report, date, output_dir):
     content_sha256 = hashlib.sha256(content_bytes).hexdigest()
     with _directory_lock(dir_path) as directory_fd:
         _ensure_no_recovery_artifacts(directory_fd, dir_path)
-        existing_identity = _ensure_replaceable_report(
+        with _open_replaceable_report(
             directory_fd,
             file_name,
             file_path,
             content,
-        )
-
-        file_descriptor, temporary_name = _create_temporary_report(directory_fd)
-        try:
-            with os.fdopen(file_descriptor, "wb") as file:
-                file.write(content_bytes)
-                file.flush()
-                os.fsync(file.fileno())
-                temporary_info = os.fstat(file.fileno())
-                temporary_identity = (
-                    temporary_info.st_dev,
-                    temporary_info.st_ino,
-                )
-            _assert_directory_path(dir_path, directory_fd)
-            previous_name = _publish_temporary_report(
-                directory_fd,
-                temporary_name,
-                file_name,
-                file_path,
-                existing_identity,
+        ) as existing_file_descriptor:
+            file_descriptor, temporary_name = _create_temporary_report(
+                directory_fd
             )
-            os.fsync(directory_fd)
-            _assert_directory_path(dir_path, directory_fd)
-            file_identity = _verify_published_report(
-                directory_fd,
-                file_name,
-                file_path,
-                temporary_identity,
-                content_sha256,
-            )
-            if previous_name is not None:
-                os.unlink(previous_name, dir_fd=directory_fd)
-                os.fsync(directory_fd)
-            directory_info = os.fstat(directory_fd)
-            directory_identity = (
-                directory_info.st_dev,
-                directory_info.st_ino,
-            )
-        except BaseException:
             try:
-                os.unlink(temporary_name, dir_fd=directory_fd)
-            except OSError:
-                pass
-            raise
+                with os.fdopen(file_descriptor, "wb") as file:
+                    file.write(content_bytes)
+                    file.flush()
+                    os.fsync(file.fileno())
+                    temporary_info = os.fstat(file.fileno())
+                    temporary_identity = (
+                        temporary_info.st_dev,
+                        temporary_info.st_ino,
+                    )
+                _assert_directory_path(dir_path, directory_fd)
+                previous_name = _publish_temporary_report(
+                    directory_fd,
+                    temporary_name,
+                    file_name,
+                    file_path,
+                    existing_file_descriptor,
+                )
+                os.fsync(directory_fd)
+                _assert_directory_path(dir_path, directory_fd)
+                file_identity = _verify_published_report(
+                    directory_fd,
+                    file_name,
+                    file_path,
+                    temporary_identity,
+                    content_sha256,
+                )
+                if previous_name is not None:
+                    os.unlink(previous_name, dir_fd=directory_fd)
+                    os.fsync(directory_fd)
+                directory_info = os.fstat(directory_fd)
+                directory_identity = (
+                    directory_info.st_dev,
+                    directory_info.st_ino,
+                )
+            except BaseException:
+                try:
+                    os.unlink(temporary_name, dir_fd=directory_fd)
+                except OSError:
+                    pass
+                raise
 
     return WrittenReportPath(
         file_path,
@@ -464,53 +465,69 @@ def _create_temporary_report(directory_fd):
     raise FileExistsError("임시 리포트 파일 이름을 만들 수 없습니다.")
 
 
-def _ensure_replaceable_report(
+@contextmanager
+def _open_replaceable_report(
     directory_fd,
     file_name,
     file_path,
     new_content,
 ):
-    """Refuse to replace a file not owned by this report identity."""
+    """Validate an existing report and pin its inode until publication.
+
+    Keeping the descriptor open prevents an unlinked inode from being reused
+    for a replacement file while publication compares filesystem identities.
+    """
     expected_lines = new_content.split("\n", 2)[:2]
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
         file_descriptor = os.open(file_name, flags, dir_fd=directory_fd)
     except FileNotFoundError:
-        return None
+        yield None
+        return
     except OSError as error:
         raise FileExistsError(
             f"기존 리포트 파일을 안전하게 확인할 수 없습니다: {file_path}: {error}"
         ) from error
 
     try:
-        file_info = os.fstat(file_descriptor)
-        if not stat.S_ISREG(file_info.st_mode):
+        try:
+            file_info = os.fstat(file_descriptor)
+            if not stat.S_ISREG(file_info.st_mode):
+                raise FileExistsError(
+                    f"기존 리포트 경로가 일반 파일이 아닙니다: {file_path}"
+                )
+            with os.fdopen(
+                file_descriptor,
+                "r",
+                encoding="utf-8",
+                closefd=False,
+            ) as existing_file:
+                observed_lines = [
+                    existing_file.readline(len(expected_line) + 2).rstrip("\n")
+                    for expected_line in expected_lines
+                ]
+        except FileExistsError:
+            raise
+        except (OSError, UnicodeError) as error:
             raise FileExistsError(
-                f"기존 리포트 경로가 일반 파일이 아닙니다: {file_path}"
+                f"기존 리포트 파일을 읽을 수 없습니다: {file_path}: {error}"
+            ) from error
+
+        if observed_lines != expected_lines:
+            raise FileExistsError(
+                f"기존 파일이 같은 저장소의 생성 리포트가 아닙니다: {file_path}"
             )
-        with os.fdopen(file_descriptor, "r", encoding="utf-8") as existing_file:
-            file_descriptor = None
-            observed_lines = [
-                existing_file.readline(len(expected_line) + 2).rstrip("\n")
-                for expected_line in expected_lines
-            ]
-    except FileExistsError:
-        raise
-    except (OSError, UnicodeError) as error:
-        raise FileExistsError(
-            f"기존 리포트 파일을 읽을 수 없습니다: {file_path}: {error}"
-        ) from error
-    finally:
-        if file_descriptor is not None:
+
+        yield file_descriptor
+    except BaseException:
+        try:
             os.close(file_descriptor)
-
-    if observed_lines != expected_lines:
-        raise FileExistsError(
-            f"기존 파일이 같은 저장소의 생성 리포트가 아닙니다: {file_path}"
-        )
-
-    return file_info.st_dev, file_info.st_ino
+        except OSError:
+            pass
+        raise
+    else:
+        os.close(file_descriptor)
 
 
 def _publish_temporary_report(
@@ -518,7 +535,7 @@ def _publish_temporary_report(
     temporary_name,
     file_name,
     file_path,
-    existing_identity,
+    existing_file_descriptor,
 ):
     """Publish a new report exclusively or retain an owned previous inode.
 
@@ -527,7 +544,7 @@ def _publish_temporary_report(
     atomic replacement. The caller removes the backup only after validating
     and syncing the newly published bytes.
     """
-    if existing_identity is None:
+    if existing_file_descriptor is None:
         try:
             os.link(
                 temporary_name,
@@ -549,6 +566,8 @@ def _publish_temporary_report(
         os.unlink(temporary_name, dir_fd=directory_fd)
         return None
 
+    existing_info = os.fstat(existing_file_descriptor)
+    existing_identity = (existing_info.st_dev, existing_info.st_ino)
     previous_name = _create_previous_report_link(
         directory_fd,
         file_name,
