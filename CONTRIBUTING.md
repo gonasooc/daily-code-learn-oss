@@ -4,6 +4,9 @@ Thanks for improving Daily Code Learn.
 
 ## Local Setup
 
+Development requires Git 2.37.0 or newer and Python 3.10 or newer. The CLI has
+no third-party runtime dependencies.
+
 ```bash
 git clone https://github.com/gonasooc/daily-code-learn-oss.git
 cd daily-code-learn-oss
@@ -23,15 +26,19 @@ Run tests before opening a pull request:
 python3 -m unittest discover -v
 ```
 
-Optional syntax check:
+Run the syntax check as well:
 
 ```bash
-PYTHONPYCACHEPREFIX=/tmp/daily-code-learn-pycache python3 -m py_compile generate.py lib/*.py
+PYTHONPYCACHEPREFIX=/tmp/daily-code-learn-pycache python3 -m py_compile generate.py lib/*.py tests/*.py
 ```
+
+CI runs the unit test suite on Linux with Python 3.10 through 3.14 and includes
+a macOS smoke-test job.
 
 ## Pull Requests
 
 - Keep changes focused on one problem.
 - Add or update tests for behavior changes.
-- Update `README.md` when user-facing commands or configuration change.
+- Keep `README.md` and `docs/README.ko.md` aligned when user-facing commands,
+  configuration, output paths, or behavior change.
 - Avoid committing local files such as `.env`, `config/profiles.json`, or `reports/`.

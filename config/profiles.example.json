@@ -3,12 +3,14 @@
     {
       "name": "work",
       "path": "/path/to/repositories/work",
+      "maxDepth": 1,
       "authorNames": ["Your Name"],
       "authorEmails": ["me@example.com"]
     },
     {
       "name": "personal",
       "path": "/path/to/repositories/personal",
+      "maxDepth": 1,
       "authorNames": ["Your Name"],
       "authorEmails": ["me@example.com"]
     }
@@ -16,7 +18,9 @@
   "outputDir": "./reports",
   "report": {
     "includeUncommittedDiff": true,
-    "maxDiffLines": 1200
+    "includeSensitiveFiles": false,
+    "maxDiffLines": 1200,
+    "maxDiffBytes": 2097152
   },
   "exclude": [
     "node_modules", ".next", "dist", "build", "coverage",

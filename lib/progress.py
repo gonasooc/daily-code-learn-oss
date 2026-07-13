@@ -3,7 +3,7 @@
 import sys
 import threading
 
-from lib.colors import dim, cyan
+from lib.colors import dim, cyan, safe_terminal_text
 
 
 class ProgressDisplay:
@@ -21,7 +21,12 @@ class ProgressDisplay:
             return
         with self._lock:
             label = f"[{self._done}/{self._total}]"
-            line = f"{dim(label)} {status}: {cyan(project_name)}"
+            safe_status = safe_terminal_text(status)
+            safe_project_name = safe_terminal_text(project_name)
+            line = (
+                f"{dim(label, stream=sys.stderr)} {safe_status}: "
+                f"{cyan(safe_project_name, stream=sys.stderr)}"
+            )
             sys.stderr.write(f"\r\033[K{line}")
             sys.stderr.flush()
 

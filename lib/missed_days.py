@@ -1,29 +1,109 @@
 import os
+import re
+import stat
+import threading
 from datetime import datetime, timedelta
 
-from lib.git_commands import fetch, get_commit_dates_by_author
-from lib.colors import green, yellow, red, cyan, dim, bold
-from lib.parallel import run_parallel_over_repos
+from lib.git_commands import GitCommandError, fetch, get_commit_dates_by_author
+from lib.colors import green, yellow, red, cyan, dim, bold, safe_terminal_text
+from lib.parallel import get_repo_relative_path, run_parallel_over_repos
 
 
-def _has_report(output_dir, date_str):
-    """해당 날짜의 리포트 디렉토리에 프로젝트 리포트가 있는지 확인한다."""
+_REPORT_IDENTITY_MARKER_RE = re.compile(
+    r"<!-- daily-code-learn-report:v1:[0-9a-f]{64} -->"
+)
+
+
+def _has_report(output_dir, date_str, on_error=None):
+    """해당 날짜의 리포트 디렉토리에 프로젝트 리포트가 있는지 확인한다.
+
+    파일명만으로는 사용자가 작성한 일반 Markdown과 생성된 리포트를
+    구분할 수 없으므로 현재 identity marker 또는 기존 리포트 구조를
+    첫 줄 날짜 헤더와 함께 확인한다.
+    on_error가 주어지면 읽기 오류를 전달하고 나머지 파일 확인을 계속한다.
+    """
     report_dir = os.path.join(output_dir, date_str)
-    if not os.path.isdir(report_dir):
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    report_directory_fd = None
+    try:
+        report_directory_fd = os.open(report_dir, directory_flags)
+        if not stat.S_ISDIR(os.fstat(report_directory_fd).st_mode):
+            raise NotADirectoryError(report_dir)
+    except FileNotFoundError:
         return False
-    for name in os.listdir(report_dir):
-        if name.endswith(".md") and not _is_analysis_file(name):
-            return True
-    return False
+    except (OSError, UnicodeError) as error:
+        if report_directory_fd is not None:
+            os.close(report_directory_fd)
+        if on_error is None:
+            raise
+        on_error(report_dir, error)
+        return False
+
+    try:
+        try:
+            names = os.listdir(report_directory_fd)
+        except (OSError, UnicodeError) as error:
+            if on_error is None:
+                raise
+            on_error(report_dir, error)
+            return False
+
+        expected_header = f"# {date_str} - "
+        for name in sorted(names):
+            if not name.endswith(".md"):
+                continue
+            report_path = os.path.join(report_dir, name)
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            file_descriptor = None
+            try:
+                file_descriptor = os.open(
+                    name,
+                    flags,
+                    dir_fd=report_directory_fd,
+                )
+                if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+                    raise OSError("일반 Markdown 파일이 아닙니다.")
+                with os.fdopen(
+                    file_descriptor,
+                    "r",
+                    encoding="utf-8",
+                ) as report_file:
+                    file_descriptor = None
+                    first_lines = [
+                        report_file.readline(64 * 1024).rstrip("\n")
+                        for _index in range(3)
+                    ]
+            except (OSError, UnicodeError) as error:
+                if on_error is None:
+                    raise
+                on_error(report_path, error)
+                continue
+            finally:
+                if file_descriptor is not None:
+                    os.close(file_descriptor)
+            first_line, second_line, third_line = first_lines
+            has_current_marker = bool(
+                _REPORT_IDENTITY_MARKER_RE.fullmatch(second_line.strip())
+            )
+            has_legacy_structure = (
+                second_line == ""
+                and third_line.strip() == "## 기본 정보"
+            )
+            if (
+                first_line.startswith(expected_header)
+                and (has_current_marker or has_legacy_structure)
+            ):
+                return True
+        return False
+    finally:
+        os.close(report_directory_fd)
 
 
-def _is_analysis_file(name):
-    return name == "analysis.md" or name.endswith("-analysis.md")
-
-
-def _format_project_name(root_name, repo_path):
-    project_name = os.path.basename(repo_path)
-    return f"{root_name}/{project_name}"
+def _format_project_name(root_name, root_path, repo_path):
+    relative_path = get_repo_relative_path(repo_path, {"path": root_path})
+    return f"{root_name}/{relative_path}"
 
 
 def collect_missed_days(config, days, today=None):
@@ -34,14 +114,26 @@ def collect_missed_days(config, days, today=None):
     output_dir = config["outputDir"]
 
     activity_by_date = {}
+    fetch_warnings = []
+    warning_lock = threading.Lock()
 
     def _process_repo(repo_path, root, progress):
         root_name = root["name"]
         author_emails = root.get("authorEmails", [])
-        project_name = _format_project_name(root_name, repo_path)
-        progress.update(os.path.basename(repo_path), "fetching")
-        fetch(repo_path)
-        progress.update(os.path.basename(repo_path), "collecting")
+        project_name = _format_project_name(root_name, root["path"], repo_path)
+        relative_path = get_repo_relative_path(repo_path, root)
+        progress.update(relative_path, "fetching")
+        try:
+            fetch(repo_path)
+        except GitCommandError as error:
+            with warning_lock:
+                fetch_warnings.append({
+                    "repo_path": repo_path,
+                    "repo_relative_path": relative_path,
+                    "root_name": root_name,
+                    "message": str(error),
+                })
+        progress.update(relative_path, "collecting")
         commit_dates = get_commit_dates_by_author(
             repo_path, author_emails,
             start_date.isoformat(), end_date.isoformat(),
@@ -52,6 +144,19 @@ def collect_missed_days(config, days, today=None):
         return project_name, commit_dates
 
     results = run_parallel_over_repos(config, _process_repo)
+    report_errors = []
+
+    def _record_report_error(path, error):
+        try:
+            relative_path = os.path.relpath(path, output_dir).replace(os.sep, "/")
+        except (OSError, TypeError, ValueError):
+            relative_path = os.path.basename(os.path.normpath(path)) or "?"
+        report_errors.append({
+            "repo_path": path,
+            "repo_relative_path": relative_path,
+            "root_name": "reports",
+            "message": f"리포트 확인 실패: {error}",
+        })
 
     for project_name, commit_dates in results:
         for date_str, commit_count in commit_dates.items():
@@ -72,7 +177,11 @@ def collect_missed_days(config, days, today=None):
             "project_names": project_names,
             "project_count": len(project_names),
             "commit_count": entry["commit_count"],
-            "has_report": _has_report(output_dir, date_str),
+            "has_report": _has_report(
+                output_dir,
+                date_str,
+                on_error=_record_report_error,
+            ),
         })
 
     missed_days = [entry for entry in activity_days if not entry["has_report"]]
@@ -82,13 +191,24 @@ def collect_missed_days(config, days, today=None):
         "end_date": end_date.isoformat(),
         "activity_days": activity_days,
         "missed_days": missed_days,
+        "warnings": sorted(
+            fetch_warnings,
+            key=lambda item: (item["root_name"], item["repo_relative_path"]),
+        ),
+        "errors": sorted(
+            list(getattr(results, "errors", [])) + report_errors,
+            key=lambda item: (
+                item.get("root_name", ""),
+                item.get("repo_relative_path", item.get("repo_path", "")),
+            ),
+        ),
     }
 
 
 def _is_valid_date_input(value):
     try:
-        datetime.strptime(value, "%Y-%m-%d")
-        return True
+        parsed_date = datetime.strptime(value, "%Y-%m-%d")
+        return parsed_date.strftime("%Y-%m-%d") == value
     except ValueError:
         return False
 
@@ -119,7 +239,10 @@ def pick_missed_day(result, days, input_func=input, max_display=10):
     print("")
 
     for index, entry in enumerate(shown_days, start=1):
-        projects = ", ".join(entry["project_names"])
+        projects = ", ".join(
+            safe_terminal_text(project_name)
+            for project_name in entry["project_names"]
+        )
         proj_count = str(entry["project_count"])
         commit_count = str(entry["commit_count"])
         print(
@@ -146,6 +269,12 @@ def pick_missed_day(result, days, input_func=input, max_display=10):
             return None
 
         if raw.isdigit():
+            # Python 3.11+ intentionally rejects extremely long decimal
+            # strings.  Reject them before int() so interactive input can
+            # never turn into a traceback.
+            if len(raw) > max(6, len(str(len(shown_days))) + 1):
+                print(red(f"1부터 {len(shown_days)} 사이 번호를 입력하세요."))
+                continue
             index = int(raw)
             if 1 <= index <= len(shown_days):
                 selected_date = shown_days[index - 1]["date"]

@@ -9,13 +9,22 @@
 매일 퇴근 전 터미널 명령 한 번으로 오늘 작업한 코드를 프로젝트별 마크다운으로 정리하는 CLI 도구.
 생성된 마크다운은 Claude, Codex 등에 직접 던져서 분석 가능.
 
+## 요구 사항
+
+- `PATH`에서 실행할 수 있는 Git 2.37.0 이상
+- Python 3.10 이상 (CI 검증 범위: Python 3.10~3.14)
+- macOS 또는 Linux
+- 동일 디렉터리 하드 링크, 원자적 교체, 디렉터리 `fsync`를 지원하는
+  `outputDir` 파일시스템
+
 ## 특징
 
 - Python3 표준 라이브러리만 사용 (의존성 0개)
-- macOS/Linux 기본 Python3으로 바로 실행
-- 설정한 루트 경로 하위의 git 저장소를 자동 탐색
+- 직계 Git 저장소를 기본 탐색하고 `roots[].maxDepth`로 제한된 재귀 탐색 지원
+- 일반 저장소(`.git` 디렉터리)와 연결된 worktree(`.git` 파일) 지원
 - 실행 시 `git fetch`로 원격 브랜치 동기화 — pull 없이도 다른 환경에서 push한 커밋 탐지
-- 커밋 이력, staged/unstaged 변경 파일을 마크다운으로 출력
+- 커밋 이력, staged/unstaged 변경 파일, untracked 파일 목록을 마크다운으로 출력
+- 읽기 쉬운 저장소 식별자와 결정적 해시로 같은 프로젝트명의 리포트 충돌 방지
 - 터미널 출력에 ANSI 색상 적용 (성공/경고/에러 구분)
 - 텔레그램 봇을 통한 분석 결과 전송, 필요 시 리포트 전송 (선택)
 
@@ -37,7 +46,18 @@ python3 generate.py --doctor
 python3 generate.py
 ```
 
-생성 결과는 `reports/{날짜}/{프로젝트명}.md`에 저장된다.
+생성 결과는 다음 경로에 저장된다.
+
+```text
+reports/{날짜}/{root--저장소-상대-경로-slug}--{16자리 해시}.md
+```
+
+ASCII slug는 `root 이름--저장소 상대 경로`에서 만들고 경로 경계에는 `--`를
+사용한다. 그 밖의 안전하지 않은 연속 문자는 `-`로 바꾸고 최대 160자로
+제한한다. 뒤의 16자리는 정확한 root/저장소 식별자의 SHA-256 앞부분이므로
+slug가 정규화되거나 잘린 이름에 안정적인 구분자를 더한다. 그래도 한 실행에서
+최종 파일명이 충돌하면 덮어쓰지 않고 실패로 처리한다. 로컬 절대 경로는
+파일명이나 리포트 기본 정보에 기록하지 않는다.
 
 ## 실행 방법
 
@@ -57,6 +77,9 @@ python3 generate.py
 # 특정 날짜 기준
 python3 generate.py --date 2026-03-12
 
+# 과거 날짜 리포트에 현재 작업 트리를 명시적으로 포함
+python3 generate.py --date 2026-03-12 --include-current-changes
+
 # 생성 직후 리포트까지 보내고 싶을 때만
 python3 generate.py --notify
 
@@ -65,9 +88,22 @@ python3 generate.py --check-missed
 
 # 최근 14일 기준 누락된 학습일 점검
 python3 generate.py --check-missed --days 14
+
+# Git 실패 원인 등 상세 수집 로그 표시
+python3 generate.py --verbose
 ```
 
 `--check-missed`는 누락 날짜를 조회만 하지 않고, 선택한 날짜 하루치 리포트를 바로 생성한다.
+`--days`는 1~3650 범위에서 지정할 수 있다.
+
+ANSI 색상 출력을 끄려면 표준 `NO_COLOR` 환경변수를 정의한다.
+리디렉션된 출력에도 색상이 필요하면 `FORCE_COLOR=1`, 명시적으로 끄려면
+`FORCE_COLOR=0`을 사용한다.
+
+```bash
+NO_COLOR=1 python3 generate.py
+FORCE_COLOR=1 python3 generate.py
+```
 
 ## 초기 설정
 
@@ -84,6 +120,7 @@ python3 generate.py --init
     {
       "name": "my-workspace",
       "path": "/path/to/repositories",
+      "maxDepth": 2,
       "authorNames": ["My Name"],
       "authorEmails": ["my@email.com"]
     }
@@ -91,10 +128,15 @@ python3 generate.py --init
   "outputDir": "./reports",
   "report": {
     "includeUncommittedDiff": true,
-    "maxDiffLines": 1200
+    "includeSensitiveFiles": false,
+    "maxDiffLines": 1200,
+    "maxDiffBytes": 2097152
   },
   "exclude": ["node_modules", ".next", "dist", "build", "coverage",
-              "package-lock.json", "yarn.lock", "pnpm-lock.yaml"]
+              "package-lock.json", "yarn.lock", "pnpm-lock.yaml"],
+  "telegram": {
+    "enabled": false
+  }
 }
 ```
 
@@ -108,47 +150,125 @@ python3 generate.py --doctor
 
 `--doctor`는 다음 항목을 점검한다:
 
+- `PATH`에서 Git 2.37.0 이상을 실행할 수 있는지
 - `config/profiles.json` 존재 여부와 JSON 파싱 가능 여부
+- 각 필드의 타입과 허용 범위
 - `roots[].path` 경로 존재 여부
-- root 안에서 발견되는 git 저장소 수
-- 예시 author 값이 그대로 남아 있는지 여부
+- 발견한 `.git` marker가 실제로 사용할 수 있는 Git worktree인지, 각 root의
+  설정 깊이 안에 고유하고 사용 가능한 저장소와 연결된 worktree가 몇 개인지
+  (0개면 설정 실패로 표시)
+- 같은 실제 저장소가 둘 이상의 설정 root에서 중복 발견되는지
+- 비어 있지 않고 고유한 root 이름과 비어 있지 않은 author 필터
+- `outputDir` 생성 및 읽기·쓰기·탐색 가능 여부
 - 텔레그램 활성화 시 필요한 환경변수 존재 여부
+
+일반 리포트 생성 전에도 스키마·경로·읽기·쓰기 가능 여부를 같은 로직으로 검증하고,
+잘못된 설정은 저장소 탐색 전에 중단한다. `--doctor`는 여기에 author 예시 값과
+텔레그램 환경변수 같은 초기 설정 점검을 추가한다.
 
 | 필드 | 설명 |
 |------|------|
-| `roots[].name` | 워크스페이스 이름 (콘솔 출력용) |
-| `roots[].path` | git 저장소들이 모여있는 상위 디렉토리 경로 |
+| `roots[].name` | 콘솔과 리포트 경로에 사용하는 고유한 워크스페이스 이름 |
+| `roots[].path` | Git 저장소와 worktree를 탐색할 디렉터리 |
+| `roots[].maxDepth` | 최대 탐색 깊이. 직계 자식은 깊이 `1` (기본 `1`) |
 | `roots[].authorNames` | 작성자 이름 |
-| `roots[].authorEmails` | git log 필터링에 사용할 이메일 |
+| `roots[].authorEmails` | 커밋을 OR 조건으로 필터링할 Git 작성자 이메일 |
 | `outputDir` | 리포트 저장 경로 |
 | `report.includeUncommittedDiff` | staged/unstaged 변경의 diff 포함 여부 (기본 `true`) |
-| `report.maxDiffLines` | 커밋/현재 변경 diff 블록을 최대 몇 줄까지 출력할지 설정 (기본 `1200`) |
-| `exclude` | diff 결과에서 제외할 파일/디렉토리 패턴 |
+| `report.includeSensitiveFiles` | 일반적인 민감 파일을 리포트 데이터에 허용할지 여부 (기본 `false`) |
+| `report.maxDiffLines` | 커밋/현재 변경 diff 블록의 최대 줄 수. `0`은 줄 제한 비활성화(별도 byte 제한은 적용) (기본 `1200`) |
+| `report.maxDiffBytes` | diff 블록당 보존할 최대 raw byte 수. `0`은 byte 제한 비활성화 (기본 `2097152`, 2 MiB) |
+| `exclude` | 파일 목록과 diff에서 제외할 glob/경로 패턴 |
 | `telegram.enabled` | 텔레그램 전송 기능 사용 여부 (기본 `false`) |
+
+`roots[].path`는 저장소 자체 또는 저장소들을 담은 디렉터리를 가리킬 수 있다.
+어떤 디렉터리를 저장소로 인식하면 그 아래로는 더 탐색하지 않는다. 저장소가
+중간 그룹 폴더 아래에 있다면 `maxDepth`를 늘린다. 깊이 제한은 관련 없는 깊은
+디렉터리를 모두 순회하지 않게 한다. 같은 저장소를 중복 처리하지 않도록 경로
+표기나 대소문자가 달라도 파일시스템 정체성이 같거나 서로 겹치는 root는 설정
+오류로 처리한다.
+
+`exclude`는 저장소 상대 경로에 대해 대소문자를 구분해 판정한다. `/`가 없는
+패턴은 각 경로 세그먼트 전체에 적용하므로 `dist`는 `dist` 디렉터리를 제외하지만
+`distribution`은 제외하지 않는다. `*.lock` 같은 셸 스타일 패턴도 같은 방식으로
+동작한다. `/`가 있는 패턴은 저장소 상대 경로 전체와 디렉터리 경계에 맞는
+접미 경로에 적용한다. 제외는 파일 목록과 파일 단위 diff 블록에 적용되며,
+Git이 rename으로 감지한 변경은 이전·새 경로 중 하나라도 제외 대상이면 전체
+diff 블록을 뺀다.
+
+안전 기본값은 `.env`와 `.env.*`를 제외하되 `.env.example`, `.env.sample`,
+`.env.template`은 허용하고, 일반적인 개인 키 ID, `*.pem`, `*.key`, `*.p12`,
+`*.pfx`, credentials/service-account/secrets JSON·YAML 파일명을 제외한다.
+`report.includeSensitiveFiles`를 `true`로 설정할 때만 이 기본값을 우회한다.
+설정의 `exclude` 목록은 이 경우에도 항상 적용되며, 생성물과 프로젝트 고유의
+민감 경로를 추가한다. 이 보호는 경로 기반이므로 파일 내용, 커밋 메시지,
+브랜치 이름 안의 비밀값까지 검사하지는 않는다. 비밀 내용을 민감하지 않은
+이름의 경로로 복사하면 기본 필터를 우회할 수 있으므로 프로젝트 전용 exclude를
+추가해야 한다.
+
+상대 `roots[].path`와 `outputDir`은 프로세스를 실행한 현재 작업 디렉터리를
+기준으로 해석한다.
 
 ## 리포트 생성 조건
 
-다음 중 하나라도 해당하면 해당 프로젝트의 리포트가 생성됨:
+다음 중 하나라도 해당하면 해당 프로젝트의 리포트가 생성된다.
 
 - 해당 날짜에 커밋이 1개 이상
-- staged 변경이 1개 이상
-- unstaged 변경이 1개 이상
-- untracked 파일이 1개 이상
+- 현재 변경 포함 상태에서 staged 변경이 1개 이상
+- 현재 변경 포함 상태에서 unstaged 변경이 1개 이상
+- 현재 변경 포함 상태에서 untracked 파일이 1개 이상
 
-staged/unstaged 변경은 기본적으로 파일 목록과 diff가 함께 출력된다.
-untracked 파일은 파일 목록만 출력된다.
+오늘 날짜 리포트는 현재 작업 트리를 기본으로 포함한다. 과거 날짜를
+`--date`로 지정한 경우에는 오늘의 staged/unstaged/untracked 상태가 당시
+상태를 의미하지 않으므로 해당 날짜의 커밋만 포함한다. 과거 리포트에 현재
+작업 트리가 정말 필요한 경우에만 `--include-current-changes`를 추가한다.
+
+커밋 날짜는 실행 머신의 로컬 시간대 기준 committer date로 통일한다. 이
+기준을 `--date` 필터, 리포트 표시 시간, 누락일 집계에 모두 사용하며 최신
+커밋부터 출력한다. 여러 `authorEmails`는 OR 조건으로 한 번에 결합하고 같은
+커밋은 한 번만 포함한다.
+
+현재 변경을 포함할 때 staged/unstaged 변경은 기본적으로 파일 목록과 diff가
+함께 출력되고, untracked 파일은 파일 목록만 출력된다.
+각 diff 블록은 `report.maxDiffLines` 줄과 `report.maxDiffBytes` raw byte까지만
+보존한다. 둘 중 하나에 도달하면 해당 Git diff 프로세스를 종료하고 나머지가
+생략됐음을 기록한다.
+`0`은 해당 제한만 비활성화한다.
 커밋 전 변경 diff가 너무 길거나 민감한 경우 `report.includeUncommittedDiff`를 `false`로 설정하면 파일 목록만 남긴다.
+
+리포트 기본 정보에는 로컬 절대 경로 대신 저장소 상대 경로가 표시되고, 설정한
+작성자 이메일은 출력하지 않는다. 단, diff에는 소스 코드·자격 증명·개인
+정보·로컬 문자열이 포함될 수 있으므로 외부 전송 전에 리포트를 확인하고
+`exclude`를 관리한다.
+
+같은 날짜를 다시 실행할 때 기존 일반 파일의 첫 두 줄에 날짜 헤더와 전체
+identity marker가 같은 root·저장소와 일치하는 경우에만 생성 파일을 덮어쓴다.
+생성 리포트를 편집할 때는 이 두 줄을 유지한다. 결정적 대상 경로를 검증할 때 다른
+파일, 심볼릭 링크, 특수 파일이 있으면 교체하지 않고 실패한다. 다른 프로젝트 리포트나
+분석 파일은 삭제하지 않는다. Daily Code Learn 실행끼리는 디렉터리 잠금으로
+직렬화한다. 소유자 쓰기 파일과 마찬가지로 같은 OS 사용자로 실행되는 별도
+프로세스는 파일시스템 신뢰 경계 안에 있으므로 생성 중 대상 경로를 변경하면 안 된다.
+생성·누락일 판정·알림에서 날짜별 리포트
+디렉터리 자체도 심볼릭 링크가 아닌 실제 디렉터리여야 한다. 기존에 생성된 프로젝트명 전용
+`reports/{날짜}/{프로젝트}.md` 파일도 마이그레이션하거나 삭제하지 않고 누락일
+판정에서 인식한다. 새 파일은 읽기 쉬운 식별자와 해시를 사용한다. 지원하는
+파일시스템에서는 교체 가능한 리포트를 원자적으로 교체하고 소유자만 읽고 쓸 수
+있는 `0600` 권한으로 저장한다. 새 날짜 디렉터리는 `0700` 권한으로 만들며,
+현재 사용자 소유가 아니거나 그룹·기타 사용자에게 쓰기 권한이 있는 기존 날짜
+디렉터리는 사용하지 않는다. 교체가 시작됐을 수 있는 시점에 게시가 중단되면 이전
+inode를 숨김 복구 파일로 보존하며, 다음 실행은 복구 데이터를 누적하거나 임의로
+삭제하지 않고 중단한다.
 
 ## 누락된 학습일 점검
 
 `--check-missed`는 `작업은 했지만 리포트를 만들지 않은 날짜`를 찾고, 그중 오늘 진행할 날짜 1개를 골라 바로 리포트를 생성한다.
 
 - 판정 단위는 프로젝트가 아니라 날짜 단위
-- 기준 데이터는 최근 N일 동안의 author 기준 커밋
-- `reports/{날짜}` 안에 프로젝트 리포트 `.md`가 1개 이상 있으면 누락 아님
-- `analysis.md`, `codex-analysis.md`, `claude-analysis.md`, `*-analysis.md`만 있는 경우는 누락으로 유지
+- 기준 데이터는 최근 N일 동안 로컬 시간대 committer date와 author 이메일 OR 조건에 맞는 커밋
+- `reports/{날짜}`의 `.md` 파일에 해당 날짜 생성 헤더와 현재의 전체 identity marker 또는 기존 리포트의 기본 정보 구조가 함께 있으면 누락 아님. 두 형식을 모두 인식하되 날짜 모양의 일반 메모는 리포트로 오인하지 않음
+- 분석 파일은 위 생성 리포트 구조 중 하나를 의도적으로 흉내 내지 않는 한 리포트로 세지 않음
 - 오늘은 아직 회고 전일 수 있으므로 기본 점검 범위에서 제외
-- 최신 10개 누락 날짜만 번호로 보여주고, 더 오래된 날짜는 `YYYY-MM-DD`로 직접 입력해 선택
+- 최신 10개에 표시되지 않은 점검 범위 안의 날짜는 `YYYY-MM-DD`로 직접 입력해 선택
 - `Enter`, `q`, `quit` 입력 시 생성 없이 종료
 - 날짜를 선택하면 그 날짜만 기존 `--date YYYY-MM-DD` 흐름으로 바로 생성하고, 분석은 별도 단계로 진행
 
@@ -167,8 +287,8 @@ $ python3 generate.py --check-missed --days 14
 > 2
 선택한 날짜: 2026-03-05
 
-  [work] api-server: 커밋 3건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-05/api-server.md
-  [personal] daily-code-learn: 커밋 1건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-05/daily-code-learn.md
+  [work] api-server: 커밋 3건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-05/work--api-server--<16자리-해시>.md
+  [personal] daily-code-learn: 커밋 1건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-05/personal--daily-code-learn--<16자리-해시>.md
 
 총 2개 프로젝트 리포트 생성 완료 (2026-03-05)
 
@@ -180,13 +300,26 @@ $ python3 generate.py --check-missed --days 14
 
 ```
 $ python3 generate.py
-  [work] admin-web: 커밋 6건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-12/admin-web.md
-  [personal] api-server: 커밋 2건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-12/api-server.md
+  [work] admin-web: 커밋 6건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-12/work--admin-web--<16자리-해시>.md
+  [personal] api-server: 커밋 2건, staged 0건, unstaged 0건, untracked 0건 → ./reports/2026-03-12/personal--api-server--<16자리-해시>.md
 
 총 2개 프로젝트 리포트 생성 완료 (2026-03-12)
 ```
 
-리포트는 `reports/{날짜}/{프로젝트명}.md` 경로에 저장됨.
+리포트는 `reports/{날짜}/{root--저장소-상대-경로-slug}--{16자리 해시}.md`에 저장된다.
+
+## 진단과 종료 코드
+
+Git 실패는 영향을 받은 root 기준 상대 저장소 경로와 함께 출력한다. fetch,
+탐색 또는 수집 실패를 정상적인 "작업 없음"으로 처리하지 않고, 해당 실행을
+불완전 상태로 표시해 0이 아닌 코드로 종료한다. 다른 저장소에서 정상 수집한
+리포트는 그대로 저장한다. 추가 저수준 Git 진단 로그는 `--verbose`로 확인한다.
+
+| 종료 코드 | 의미 |
+|----------|------|
+| `0` | 명령 완료. 일치하는 작업이 없거나 누락일 탐색이 정상 완료된 상태에서 선택을 취소한 경우 포함 |
+| `1` | 설정, 저장소 수집, 리포트 쓰기, 알림 과정이 실패했거나 불완전함 |
+| `2` | 인자 파서가 거부한 CLI 사용법 |
 
 ## LLM 분석
 
@@ -228,6 +361,7 @@ codex
 1. `.env` 파일 생성:
    ```bash
    cp .env.example .env
+   chmod 600 .env
    ```
 
 2. `.env`에 봇 토큰과 chat ID 입력:
@@ -246,6 +380,10 @@ codex
    ```
 
 `telegram.enabled`는 텔레그램 전송 기능을 사용할지 여부만 결정한다. 이 값이 `true`여도 `python3 generate.py`는 자동 전송하지 않는다.
+자격 증명은 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` 환경변수에서만 읽으며
+`profiles.json`에 저장된 자격 증명 형태의 값은 무시한다.
+CLI는 심볼릭 링크, 일반 파일이 아닌 경로, 다른 사용자 소유, 그룹·기타
+사용자 권한이 있는 `.env`를 거부한다.
 
 분석 결과 전송:
 
@@ -259,10 +397,25 @@ python3 lib/notifier.py reports/2026-04-09/codex-analysis.md 2026-04-09
 python3 generate.py --notify
 ```
 
+`--notify`는 현재 실행에서 새로 쓴 리포트 파일만 전송한다. 날짜 폴더에 이미
+있던 기존 형식·오래된 리포트나 분석 마크다운은 다시 전송하지 않는다.
+변환 전에 쓰기 시점에 기록한 날짜 디렉터리 정체성, 파일 정체성, SHA-256 내용이
+그대로인지 확인하며 교체되거나 수정된 현재 실행 파일은 거부한다.
+명시적으로 전송을 요청한 것이므로 텔레그램 비활성화, 자격 증명 누락 또는
+전송 실패가 하나라도 있으면 0이 아닌 종료 코드를 반환한다.
+
+직접 실행하는 `lib/notifier.py` 명령은 8 MiB 이하이면서 심볼릭 링크가 아닌
+UTF-8 일반 파일만 허용한다. 리포트 `exclude`나 민감 경로 필터를 다시
+적용하거나 내용의 비밀값을 검사하지 않으므로 전송 전에 파일 전체를 검토한다.
+생성 리포트 메타데이터 중 내부 identity marker만 텔레그램 메시지에서 제외한다.
+변환 결과가 100개를 넘는 메시지를 필요로 하면 일부도 보내기 전에 거부한다.
+
 ### 전송 방식
 
 - 마크다운을 텔레그램 호환 HTML로 변환하여 메시지로 전송 (`parse_mode: HTML`)
-- 4096자 초과 시 줄 단위로 분할하여 여러 메시지로 전송
+- HTML 래퍼 길이까지 계산해 실제 전송 청크가 각각 4096자를 넘지 않도록 분할
+- BMP 밖 문자는 UTF-16 code unit으로 보수적으로 계산해 같은 제한 적용
+- 본문·파일명·날짜의 표시 제어문자는 화면에 보이는 escape 문자열로 변환
 - 로컬 `.md` 파일은 기존 마크다운 형식 그대로 유지
 
 | 마크다운 | 텔레그램 표시 |
@@ -295,24 +448,48 @@ python3 generate.py --doctor
 
 - root 경로가 실제 git 저장소들의 상위 디렉토리인지 확인한다.
 - `authorEmails`가 `git log`에 찍힌 이메일과 같은지 확인한다.
-- 해당 날짜에 커밋, staged, unstaged, untracked 변경 중 하나라도 있는지 확인한다.
+- 대상 날짜에 설정한 작성자의 커밋이 있는지 확인한다.
+- 오늘 리포트라면 staged, unstaged, untracked 변경이 있는지 확인한다.
+- 과거 날짜에 현재 변경을 의도적으로 포함하려면 `--include-current-changes`를 지정한다.
 
 ### diff가 너무 길거나 민감할 때
 
-`config/profiles.json`에서 diff 포함 여부와 최대 줄 수를 조정한다.
+`config/profiles.json`에서 diff 포함 여부와 최대 줄/byte 수를 조정한다.
 
 ```json
 {
   "report": {
     "includeUncommittedDiff": false,
-    "maxDiffLines": 600
+    "maxDiffLines": 600,
+    "maxDiffBytes": 1048576
   }
 }
 ```
 
+### 기존 리포트 디렉터리가 거부될 때
+
+`reports/{날짜}`는 현재 사용자 소유이고 그룹·기타 사용자에게 쓰기 권한이 없어야
+한다. 이전 버전이 넓은 umask로 만든 디렉터리라면 소유자와 내용을 먼저 확인한 뒤
+권한을 줄인다.
+
+```bash
+chmod 700 reports/2026-03-12
+```
+
+### 리포트 게시 또는 복구 파일 때문에 거부될 때
+
+안전한 게시에는 동일 디렉터리 하드 링크, 원자적 교체, 디렉터리 `fsync`가
+필요하다. 이 기능을 지원하지 않는 파일시스템이라면 호환되는 다른 `outputDir`을
+사용한다. 네트워크·이동식·사용자 공간 파일시스템은 지원 여부가 다를 수 있다.
+
+중단된 쓰기는 `.report-*.tmp` 또는 `.previous-report-*.tmp` 숨김 복구 파일을
+남길 수 있다. 다음 실행이 표시한 경로와 결정적 `.md` 대상을 비교하고 필요한
+버전을 별도로 보존한 다음, 검토가 끝난 복구 파일만 제거하고 다시 실행한다.
+
 ### 텔레그램 전송이 되지 않을 때
 
 - `.env`에 `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`가 있는지 확인한다.
+- `chmod 600 .env`를 실행한다. 더 넓은 권한과 심볼릭 링크는 거부된다.
 - `config/profiles.json`에서 `telegram.enabled`가 `true`인지 확인한다.
 - 먼저 `python3 generate.py --doctor`로 누락된 환경변수를 확인한다.
 
@@ -323,10 +500,12 @@ daily-code-learn/
   generate.py                 # CLI 진입점
   lib/
     config.py                 # 설정 로드 + CLI 인자 파싱
-    scanner.py                # root 하위 git 저장소 탐색
+    scanner.py                # 깊이 제한 저장소와 worktree 탐색
     git_commands.py           # git 명령어 래퍼 (fetch, log, diff)
     colors.py                 # 터미널 출력 색상 유틸리티 (ANSI)
     collector.py              # 리포트 데이터 수집
+    parallel.py               # 저장소 병렬 실행 공용 헬퍼
+    progress.py               # 스레드 안전 터미널 진행 표시
     missed_days.py            # 누락된 학습일 점검
     renderer.py               # 마크다운 생성 + 파일 저장
     notifier.py               # 텔레그램 알림 전송
@@ -338,11 +517,13 @@ daily-code-learn/
   .env.example                # 환경변수 템플릿
   .env                        # 실제 환경변수 (gitignored)
   reports/                    # 생성 결과 (gitignored)
+  tests/                      # 단위·통합 성격 회귀 테스트
+  .github/workflows/ci.yml    # Linux Python 매트릭스 + macOS smoke test
 ```
 
 ## Release
 
-현재 버전은 `0.1.0`이다.
+현재 버전은 다음 명령으로 확인한다.
 
 ```bash
 python3 generate.py --version
