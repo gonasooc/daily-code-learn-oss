@@ -29,6 +29,7 @@ Run one terminal command before you finish work, and it scans your configured wo
 - Keeps report names collision-resistant with a readable repository identity and deterministic hash.
 - Detects missed report days with `--check-missed`.
 - Can send generated analysis Markdown to Telegram when enabled.
+- Ships Claude Code and Codex skills — `/analyze`, `/dig`, `/publish`, `/scrum` — that turn reports into learning notes, per-project follow-up sessions, and standup summaries.
 
 ## Quickstart
 
@@ -151,6 +152,10 @@ Then edit `config/profiles.json`:
   ],
   "telegram": {
     "enabled": false
+  },
+  "scrum": {
+    "root": "my-workspace",
+    "outputDir": "/path/to/notes/scrum"
   }
 }
 ```
@@ -197,6 +202,8 @@ environment variables.
 | `report.maxDiffBytes` | Maximum raw diff bytes retained per block; `0` disables the byte limit. Default: `2097152` (2 MiB) |
 | `exclude` | Glob/path patterns excluded from file lists and diff output |
 | `telegram.enabled` | Whether Telegram sending is enabled. Default: `false` |
+| `scrum.root` | Optional. The `roots[].name` whose repositories the `/scrum` skill summarizes |
+| `scrum.outputDir` | Optional. Directory where `/scrum` writes `{date}.md`, usually a notes folder outside `reports/` |
 
 `roots[].path` may point to a repository itself or to a directory that contains
 repositories. Scanning stops below a directory as soon as that directory is
@@ -227,6 +234,11 @@ explicit project-specific exclude.
 
 Relative `roots[].path` and `outputDir` values are resolved from the process's
 current working directory.
+
+`scrum` is optional. Only the `/scrum` skill reads it, and `--doctor` does not
+validate it; when the block is missing the skill stops with a hint instead of
+guessing. Standup summaries are work records rather than learning material, so
+`scrum.outputDir` normally points outside `reports/`.
 
 ## When Reports Are Generated
 
@@ -331,6 +343,30 @@ low-level Git diagnostic log.
 ## LLM Analysis Workflow
 
 Generated reports include Git diffs, so you can ask an LLM to turn them into learning notes.
+
+### Skills
+
+The repository ships skills for Claude Code (`.claude/skills/`) and Codex
+(`.agents/skills/`, agentskills.io layout). Open a session in the project root and
+invoke them by name. Codex uses a `$` prefix (`$analyze`, `$dig`, and so on).
+
+| Skill | What it does | Writes |
+| --- | --- | --- |
+| `/analyze [date]` | Reads every report for one day and writes a learning analysis following `prompts/analyze.md`. Sends the result through Telegram when enabled. | `reports/{date}/claude-analysis.md` from Claude Code, `codex-analysis.md` from Codex |
+| `/dig <project> [date]` | Opens a follow-up conversation about one project's diff for that day. It first recalls what you did not know from earlier `/dig` sessions on the same project, reads the repository's source when the diff alone cannot answer a question, and cross-references the project's rows across every past analysis. Without arguments it lists the projects that have a report for the day. | Nothing until you run `/publish` |
+| `/publish [project]` | Closes a `/dig` conversation by recording what you did not know as question, one-line answer, and takeaway. It is not a transcript, and it does not invent entries when you asked nothing. | `reports/dig/{root--repo}/{date}.md`, appended when the file already exists |
+| `/scrum` | Summarizes the last working day plus this morning for the `scrum.root` workspace, grouped by project, for a morning standup. Runs `generate.py --check-missed` and `generate.py` first so the reports are current. | `{scrum.outputDir}/{date}.md`, overwritten on the same day |
+
+`/dig` and `/publish` keep their output under `reports/dig/`, beside the dated
+report directories. `--check-missed`, `--notify`, and `/analyze` only look inside
+`reports/{date}/`, so those files are never mistaken for reports or sent anywhere.
+
+`/scrum` is a work report, not a learning note. It copies ticket IDs and `#time`
+values from commit titles verbatim, condenses long commit comments to one
+sentence, drops merge and version-bump commits, and omits a repository that had
+only those. Set `scrum.root` and `scrum.outputDir` in `config/profiles.json` first.
+
+### Without skills
 
 The analysis prompt template is available at:
 
@@ -518,6 +554,8 @@ daily-code-learn/
     missed_days.py            # missed report day detection
     renderer.py               # Markdown rendering and file writing
     notifier.py               # Telegram notification sending
+  .claude/skills/             # Claude Code skills: analyze, dig, publish, scrum
+  .agents/skills/             # Codex skills; dig, publish, scrum link to .claude/skills/
   prompts/
     analyze.md                # LLM analysis prompt template
   config/
@@ -526,6 +564,8 @@ daily-code-learn/
   .env.example                # environment variable template
   .env                        # local secrets, ignored by Git
   reports/                    # generated reports, ignored by Git
+    {date}/                   # per-day project reports and LLM analyses
+    dig/                      # /publish output, one folder per project
   tests/                      # unit and integration-style regression tests
   .github/workflows/ci.yml    # Linux Python matrix and macOS smoke test
 ```

@@ -28,5 +28,9 @@
   ],
   "telegram": {
     "enabled": false
+  },
+  "scrum": {
+    "root": "work",
+    "outputDir": "/path/to/notes/scrum"
   }
 }

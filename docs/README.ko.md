@@ -27,6 +27,7 @@
 - 읽기 쉬운 저장소 식별자와 결정적 해시로 같은 프로젝트명의 리포트 충돌 방지
 - 터미널 출력에 ANSI 색상 적용 (성공/경고/에러 구분)
 - 텔레그램 봇을 통한 분석 결과 전송, 필요 시 리포트 전송 (선택)
+- Claude Code·Codex 스킬 내장 — `/analyze`, `/dig`, `/publish`, `/scrum`. 리포트를 학습 노트, 프로젝트별 후속 질문 세션, 스크럼 요약으로 바꾼다
 
 ## 5분 Quickstart
 
@@ -136,6 +137,10 @@ python3 generate.py --init
               "package-lock.json", "yarn.lock", "pnpm-lock.yaml"],
   "telegram": {
     "enabled": false
+  },
+  "scrum": {
+    "root": "work",
+    "outputDir": "/path/to/notes/scrum"
   }
 }
 ```
@@ -180,6 +185,12 @@ python3 generate.py --doctor
 | `report.maxDiffBytes` | diff 블록당 보존할 최대 raw byte 수. `0`은 byte 제한 비활성화 (기본 `2097152`, 2 MiB) |
 | `exclude` | 파일 목록과 diff에서 제외할 glob/경로 패턴 |
 | `telegram.enabled` | 텔레그램 전송 기능 사용 여부 (기본 `false`) |
+| `scrum.root` | 선택. `/scrum` 스킬이 요약할 `roots[].name` |
+| `scrum.outputDir` | 선택. `/scrum`이 `{날짜}.md`를 쓰는 디렉터리. 보통 `reports/` 밖의 노트 폴더 |
+
+`scrum`은 선택 항목이다. `/scrum` 스킬만 읽고 `--doctor`는 검증하지 않는다.
+블록이 없으면 스킬이 추측하지 않고 안내 후 멈춘다. 스크럼 요약은 학습 자료가
+아니라 업무 기록이므로 `scrum.outputDir`는 보통 `reports/` 밖을 가리킨다.
 
 `roots[].path`는 저장소 자체 또는 저장소들을 담은 디렉터리를 가리킬 수 있다.
 어떤 디렉터리를 저장소로 인식하면 그 아래로는 더 탐색하지 않는다. 저장소가
@@ -324,6 +335,30 @@ Git 실패는 영향을 받은 root 기준 상대 저장소 경로와 함께 출
 ## LLM 분석
 
 생성된 리포트에는 커밋별 코드 diff가 포함되어 있어, Claude나 Codex 등에서 직접 참조해 학습용 분석을 생성할 수 있다.
+
+### 스킬
+
+Claude Code용(`.claude/skills/`)과 Codex용(`.agents/skills/`, agentskills.io 구조) 스킬이
+들어 있다. 프로젝트 루트에서 세션을 열고 이름으로 호출한다. Codex는 `$` 접두어를
+쓴다(`$analyze`, `$dig` 등).
+
+| 스킬 | 하는 일 | 쓰는 곳 |
+| --- | --- | --- |
+| `/analyze [날짜]` | 그날의 리포트 전부를 읽고 `prompts/analyze.md` 기준으로 학습 분석을 쓴다. 텔레그램이 켜져 있으면 전송한다. | Claude Code는 `reports/{날짜}/claude-analysis.md`, Codex는 `codex-analysis.md` |
+| `/dig <프로젝트> [날짜]` | 한 프로젝트의 그날 diff를 놓고 후속 대화를 시작한다. 같은 프로젝트의 지난 `/dig`에서 몰랐던 것을 먼저 복기하고, diff만으로 답이 안 나오면 저장소 코드를 읽고, 과거 분석 전체에서 그 프로젝트의 행을 시간축으로 참조한다. 인자 없이 실행하면 그날 리포트가 있는 프로젝트 목록만 보여준다. | `/publish` 전까지 없음 |
+| `/publish [프로젝트]` | `/dig` 대화를 마치며 몰랐던 것을 질문·한 줄 답·알게 된 것으로 남긴다. 트랜스크립트가 아니고, 질문이 없었으면 억지로 채우지 않는다. | `reports/dig/{root--repo}/{날짜}.md`. 같은 날 파일이 있으면 절을 추가 |
+| `/scrum` | `scrum.root` 작업 공간의 마지막 작업일 + 오늘 오전을 프로젝트별로 요약해 아침 스크럼 자료를 만든다. 먼저 `generate.py --check-missed`와 `generate.py`를 돌려 리포트를 최신화한다. | `{scrum.outputDir}/{날짜}.md`. 같은 날은 덮어씀 |
+
+`/dig`·`/publish`는 결과를 `reports/dig/` 아래에 둔다. 날짜 디렉터리의 형제라서
+`--check-missed`, `--notify`, `/analyze`는 `reports/{날짜}/` 안만 보므로 이 파일들을
+리포트로 오인하거나 전송하지 않는다.
+
+`/scrum`은 학습 노트가 아니라 업무 보고다. 커밋 제목의 티켓 ID와 `#time` 값을 글자
+그대로 복사하고, 긴 커밋 코멘트는 한 문장으로 줄이고, merge·버전 범프 커밋은 빼고,
+그것만 있던 저장소는 절을 만들지 않는다. 먼저 `config/profiles.json`에 `scrum.root`와
+`scrum.outputDir`를 설정한다.
+
+### 프롬프트 직접 사용
 
 `prompts/analyze.md`에 분석용 프롬프트 템플릿이 포함되어 있으며, 결과는 **전체 커버리지 + 선별 상세** 구조로 생성한다:
 
@@ -509,6 +544,8 @@ daily-code-learn/
     missed_days.py            # 누락된 학습일 점검
     renderer.py               # 마크다운 생성 + 파일 저장
     notifier.py               # 텔레그램 알림 전송
+  .claude/skills/             # Claude Code 스킬: analyze, dig, publish, scrum
+  .agents/skills/             # Codex 스킬. dig, publish, scrum은 .claude/skills/ 링크
   prompts/
     analyze.md                # LLM 분석용 프롬프트 템플릿
   config/
@@ -517,6 +554,8 @@ daily-code-learn/
   .env.example                # 환경변수 템플릿
   .env                        # 실제 환경변수 (gitignored)
   reports/                    # 생성 결과 (gitignored)
+    {날짜}/                   # 날짜별 프로젝트 리포트와 LLM 분석
+    dig/                      # /publish 결과, 프로젝트별 폴더
   tests/                      # 단위·통합 성격 회귀 테스트
   .github/workflows/ci.yml    # Linux Python 매트릭스 + macOS smoke test
 ```
