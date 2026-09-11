@@ -4,6 +4,12 @@ All notable changes to Daily Code Learn are documented here.
 
 ## Unreleased
 
+### Changed
+
+- Require a verbatim project identity and commit hash in the analysis coverage table and in detail-section titles, so a claim can be traced with `git show` and so `/dig` can tell which project a detail section belongs to.
+- Bound the `/dig` timeline index to the last 90 days; it grew with every analysis and was already consuming tens of thousands of tokens before the first question.
+- Let `/scrum` expand a long multi-task commit into sub-bullets instead of truncating it at 80 characters, which dropped most of what a multi-hour commit actually contained.
+
 ## v0.2.0 - 2026-09-10
 
 ### Added
