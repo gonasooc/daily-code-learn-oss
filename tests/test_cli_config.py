@@ -54,11 +54,10 @@ class ConfigCliTests(unittest.TestCase):
             os.chmod(env_path, 0o644)
 
             with patch.object(config, "PROJECT_ROOT", tmp_dir), \
-                    patch.dict(os.environ, {}, clear=True), \
-                    self.assertRaisesRegex(config.ConfigError, "chmod 600"):
-                config._load_env()
-
-            self.assertNotIn("TELEGRAM_BOT_TOKEN", os.environ)
+                    patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(config.ConfigError, "chmod 600"):
+                    config._load_env()
+                self.assertNotIn("TELEGRAM_BOT_TOKEN", os.environ)
 
     def test_load_env_refuses_a_symbolic_link(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -73,11 +72,10 @@ class ConfigCliTests(unittest.TestCase):
                 self.skipTest(f"symbolic links unavailable: {error}")
 
             with patch.object(config, "PROJECT_ROOT", tmp_dir), \
-                    patch.dict(os.environ, {}, clear=True), \
-                    self.assertRaises(config.ConfigError):
-                config._load_env()
-
-            self.assertNotIn("TELEGRAM_BOT_TOKEN", os.environ)
+                    patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(config.ConfigError):
+                    config._load_env()
+                self.assertNotIn("TELEGRAM_BOT_TOKEN", os.environ)
 
     def test_parse_args_prints_version_without_requiring_config(self):
         stdout = io.StringIO()
@@ -202,7 +200,11 @@ class ConfigCliTests(unittest.TestCase):
                 }, f)
 
             stdout = io.StringIO()
-            with patch.object(config, "CONFIG_PATH", config_path), patch.dict(os.environ, {}, clear=True):
+            # PROJECT_ROOT도 함께 격리한다. 그러지 않으면 run_doctor가 저장소의
+            # 실제 .env를 읽어 텔레그램 환경변수가 있는 것처럼 보인다.
+            with patch.object(config, "CONFIG_PATH", config_path), \
+                    patch.object(config, "PROJECT_ROOT", tmp_dir), \
+                    patch.dict(os.environ, {}, clear=True):
                 with redirect_stdout(stdout):
                     self.assertEqual(config.run_doctor(), 1)
 
