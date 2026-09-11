@@ -4,12 +4,19 @@ All notable changes to Daily Code Learn are documented here.
 
 ## Unreleased
 
+## v0.2.1 - 2026-09-11
+
 ### Changed
 
 - Require a verbatim project identity and commit hash in the analysis coverage table and in detail-section titles, so a claim can be traced with `git show` and so `/dig` can tell which project a detail section belongs to.
 - Bound the `/dig` timeline index to the last 90 days; it grew with every analysis and was already consuming tens of thousands of tokens before the first question.
 - Let `/scrum` expand a long multi-task commit into sub-bullets instead of truncating it at 80 characters, which dropped most of what a multi-hour commit actually contained.
 - Isolate `PROJECT_ROOT` and assert environment state inside the patched environment in configuration tests, so a real `.env` in the working tree no longer makes `_load_env` and `--doctor` tests fail.
+
+### Notes
+
+- The coverage table gains a `커밋` column and detail-section titles gain a `[root/repo hash]` prefix. Analyses written before this version keep the old shape, so an existing reports directory holds both. `/dig` reads past analyses by grepping the project's last path segment, which still matches either shape.
+- These changes take effect on the next `/analyze` run. Nothing rewrites existing analysis files.
 
 ## v0.2.0 - 2026-09-10
 

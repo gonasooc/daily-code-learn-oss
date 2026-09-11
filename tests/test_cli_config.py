@@ -85,7 +85,7 @@ class ConfigCliTests(unittest.TestCase):
                 config.parse_args(["--version"])
 
         self.assertEqual(ctx.exception.code, 0)
-        self.assertIn("Daily Code Learn 0.2.0", stdout.getvalue())
+        self.assertIn("Daily Code Learn 0.2.1", stdout.getvalue())
 
     def test_init_config_copies_example_without_overwriting_existing_file(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
