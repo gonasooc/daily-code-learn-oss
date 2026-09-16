@@ -4,6 +4,8 @@ All notable changes to Daily Code Learn are documented here.
 
 ## Unreleased
 
+## v0.2.2 - 2026-09-16
+
 ### Changed
 
 - Regenerate yesterday's report before building the scrum, so `/scrum` no longer misses every commit made after the previous morning's run. `--check-missed` skips any date that already has a report directory, so the work committed after yesterday's run stayed invisible and today's standup silently repeated the day before yesterday.
