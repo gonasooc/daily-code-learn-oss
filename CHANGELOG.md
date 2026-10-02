@@ -4,6 +4,10 @@ All notable changes to Daily Code Learn are documented here.
 
 ## Unreleased
 
+### Changed
+
+- Exclude `refs/stash` from report and missed-day commit queries so temporary stash snapshots are not counted as completed work.
+
 ## v0.2.2 - 2026-09-16
 
 ### Changed

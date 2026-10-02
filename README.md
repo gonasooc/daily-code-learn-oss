@@ -258,7 +258,8 @@ tree included in a historical report.
 Commit dates use the committer date in the machine's local timezone for
 `--date` filtering, displayed commit time, and missed-day aggregation. Commits
 are newest-first. Multiple `authorEmails` are combined as an OR filter and each
-commit is included only once.
+commit is included only once. The stash ref is excluded so Git's temporary
+stash snapshots do not appear as completed work.
 
 When current changes are enabled, staged and unstaged changes include both file
 lists and diffs by default. Untracked files are listed without diffs.

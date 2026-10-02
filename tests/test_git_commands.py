@@ -302,6 +302,82 @@ class GitCommandIntegrationTests(unittest.TestCase):
 
             self.assertEqual(get_current_branch(repo_path), "(detached HEAD)")
 
+    def test_stash_snapshots_do_not_count_as_daily_commits_or_activity_dates(self):
+        with tempfile.TemporaryDirectory() as repo_path, patch.dict(
+            os.environ, {"TZ": "UTC"},
+        ):
+            self._init_repo(repo_path)
+            self._commit(
+                repo_path, "actual work", "tester@example.com",
+                "2026-06-28T10:00:00+0000", "2026-06-28T10:00:00+0000",
+            )
+            with open(os.path.join(repo_path, "history.txt"), "a", encoding="utf-8") as file:
+                file.write("unfinished work\n")
+            with open(os.path.join(repo_path, "draft.txt"), "w", encoding="utf-8") as file:
+                file.write("untracked work\n")
+            env = os.environ.copy()
+            env.update({
+                "GIT_AUTHOR_EMAIL": "tester@example.com",
+                "GIT_COMMITTER_EMAIL": "tester@example.com",
+                "GIT_AUTHOR_DATE": "2026-06-29T10:00:00+0000",
+                "GIT_COMMITTER_DATE": "2026-06-29T10:00:00+0000",
+            })
+            subprocess.run(
+                ["git", "stash", "push", "--include-untracked", "-m", "unfinished"],
+                cwd=repo_path, env=env, check=True, capture_output=True,
+            )
+
+            self.assertEqual(
+                [commit["subject"] for commit in get_commits_by_author(
+                    repo_path, ["tester@example.com"], "2026-06-28",
+                )],
+                ["actual work"],
+            )
+            self.assertEqual(
+                get_commits_by_author(repo_path, ["tester@example.com"], "2026-06-29"),
+                [],
+            )
+            self.assertEqual(
+                get_commit_dates_by_author(
+                    repo_path, ["tester@example.com"], "2026-06-28", "2026-06-29",
+                ),
+                {"2026-06-28": 1},
+            )
+
+    def test_daily_commits_keep_custom_refs_and_detached_head(self):
+        with tempfile.TemporaryDirectory() as repo_path, patch.dict(
+            os.environ, {"TZ": "UTC"},
+        ):
+            self._init_repo(repo_path)
+            for subject in ("base", "custom ref work"):
+                self._commit(
+                    repo_path, subject, "tester@example.com",
+                    "2026-06-28T10:00:00+0000", "2026-06-28T10:00:00+0000",
+                )
+            for args in (
+                ["update-ref", "refs/review/topic", "HEAD"],
+                ["reset", "--hard", "HEAD~1"],
+                ["checkout", "--detach", "HEAD"],
+            ):
+                subprocess.run(["git", *args], cwd=repo_path, check=True, capture_output=True)
+            self._commit(
+                repo_path, "detached work", "tester@example.com",
+                "2026-06-28T11:00:00+0000", "2026-06-28T11:00:00+0000",
+            )
+
+            self.assertEqual(
+                {commit["subject"] for commit in get_commits_by_author(
+                    repo_path, ["tester@example.com"], "2026-06-28",
+                )},
+                {"base", "custom ref work", "detached work"},
+            )
+            self.assertEqual(
+                get_commit_dates_by_author(
+                    repo_path, ["tester@example.com"], "2026-06-28", "2026-06-28",
+                ),
+                {"2026-06-28": 3},
+            )
+
     def test_commits_are_sorted_by_committer_time_despite_topology_clock_skew(self):
         with tempfile.TemporaryDirectory() as repo_path:
             self._init_repo(repo_path)

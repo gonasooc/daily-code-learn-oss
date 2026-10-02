@@ -562,6 +562,7 @@ def get_commits_by_author(repo_path, author_emails, date):
     allowed_emails = {email.strip().casefold() for email in author_emails}
     output = _run_git(repo_path, [
         "log",
+        "--exclude=refs/stash",
         "--all",
         f"--since-as-filter={date} 00:00:00",
         f"--until={date} 23:59:59",
@@ -641,6 +642,7 @@ def get_commit_dates_by_author(repo_path, author_emails, start_date, end_date):
     allowed_emails = {email.strip().casefold() for email in author_emails}
     output = _run_git(repo_path, [
         "log",
+        "--exclude=refs/stash",
         "--all",
         f"--since-as-filter={start_date} 00:00:00",
         f"--until={end_date} 23:59:59",
