@@ -355,14 +355,20 @@ invoke them by name. Codex uses a `$` prefix (`$analyze`, `$dig`, and so on).
 
 | Skill | What it does | Writes |
 | --- | --- | --- |
-| `/analyze [date]` | Reads every report for one day and writes a learning analysis following `prompts/analyze.md`. Sends the result through Telegram when enabled. | `reports/{date}/claude-analysis.md` from Claude Code, `codex-analysis.md` from Codex |
+| `/analyze [date]` | Reads every report for one day and writes a learning analysis following `prompts/analyze.md`. Sends the result through Telegram when enabled. | `{outputDir}/{date}/claude-analysis.md` from Claude Code, `codex-analysis.md` from Codex |
 | `/dig <project> [date]` | Opens a follow-up conversation about one project's diff for that day. It first recalls what you did not know from earlier `/dig` sessions on the same project, reads the repository's source when the diff alone cannot answer a question, and cross-references the project's rows across every past analysis. Without arguments it lists the projects that have a report for the day. | Nothing until you run `/publish` |
-| `/publish [project]` | Closes a `/dig` conversation by recording what you did not know as question, one-line answer, and takeaway. It is not a transcript, and it does not invent entries when you asked nothing. | `reports/dig/{root--repo}/{date}.md`, appended when the file already exists |
+| `/publish [project]` | Closes a `/dig` conversation by recording what you did not know as question, one-line answer, and takeaway. It is not a transcript, and it does not invent entries when you asked nothing. | `{outputDir}/dig/{root--repo}/{date}.md`, appended when the file already exists |
 | `/scrum` | Summarizes the last working day plus today up to the collection start time for `scrum.root`. Uses `python3 -m lib.scrum` to collect current Git metadata and WIP once. | `{scrum.outputDir}/{date}.md`, overwritten on the same day |
 
-`/dig` and `/publish` keep their output under `reports/dig/`, beside the dated
+Skills use the configured `outputDir` (default `./reports`) for learning reports.
+`/dig` and `/publish` keep their output under `{outputDir}/dig/`, beside the dated
 report directories. `--check-missed`, `--notify`, and `/analyze` only look inside
-`reports/{date}/`, so those files are never mistaken for reports or sent anywhere.
+`{outputDir}/{date}/`, so those files are never mistaken for reports or sent anywhere.
+When legacy and current reports coexist for the same date and full repository
+identity, analysis skills prefer the current report. `/dig` matches history by
+full repository identity, and `/publish` stops at the next dig session so other
+projects' conversations do not get mixed into the selected project's record.
+Disabled Telegram is a successful skip for `/analyze`.
 
 `/scrum` copies ticket IDs and individual `#time` values from commit titles,
 keeps long comments as sub-bullets, and drops merge and version-bump commits.

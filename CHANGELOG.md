@@ -11,6 +11,8 @@ All notable changes to Daily Code Learn are documented here.
 - Validate optional scrum configuration in `--doctor` and the scrum collector without blocking ordinary learning report generation on scrum-only errors.
 - Exclude `refs/stash` from report and missed-day commit queries so temporary stash snapshots are not counted as completed work.
 - Handle non-decimal Unicode digit input in the missed-day picker without a traceback.
+- Honor configured `outputDir` across analysis, dig, and publish skills, prefer current reports when legacy copies coexist, and skip disabled Telegram notifications during analysis.
+- Match dig history by full repository identity and bound publish output to the selected dig session, with collision checks before appending to an existing project's notes.
 
 ## v0.2.2 - 2026-09-16
 

@@ -346,14 +346,19 @@ Claude Code용(`.claude/skills/`)과 Codex용(`.agents/skills/`, agentskills.io 
 
 | 스킬 | 하는 일 | 쓰는 곳 |
 | --- | --- | --- |
-| `/analyze [날짜]` | 그날의 리포트 전부를 읽고 `prompts/analyze.md` 기준으로 학습 분석을 쓴다. 텔레그램이 켜져 있으면 전송한다. | Claude Code는 `reports/{날짜}/claude-analysis.md`, Codex는 `codex-analysis.md` |
+| `/analyze [날짜]` | 그날의 리포트 전부를 읽고 `prompts/analyze.md` 기준으로 학습 분석을 쓴다. 텔레그램이 켜져 있으면 전송한다. | Claude Code는 `{outputDir}/{날짜}/claude-analysis.md`, Codex는 `codex-analysis.md` |
 | `/dig <프로젝트> [날짜]` | 한 프로젝트의 그날 diff를 놓고 후속 대화를 시작한다. 같은 프로젝트의 지난 `/dig`에서 몰랐던 것을 먼저 복기하고, diff만으로 답이 안 나오면 저장소 코드를 읽고, 과거 분석 전체에서 그 프로젝트의 행을 시간축으로 참조한다. 인자 없이 실행하면 그날 리포트가 있는 프로젝트 목록만 보여준다. | `/publish` 전까지 없음 |
-| `/publish [프로젝트]` | `/dig` 대화를 마치며 몰랐던 것을 질문·한 줄 답·알게 된 것으로 남긴다. 트랜스크립트가 아니고, 질문이 없었으면 억지로 채우지 않는다. | `reports/dig/{root--repo}/{날짜}.md`. 같은 날 파일이 있으면 절을 추가 |
+| `/publish [프로젝트]` | `/dig` 대화를 마치며 몰랐던 것을 질문·한 줄 답·알게 된 것으로 남긴다. 트랜스크립트가 아니고, 질문이 없었으면 억지로 채우지 않는다. | `{outputDir}/dig/{root--repo}/{날짜}.md`. 같은 날 파일이 있으면 절을 추가 |
 | `/scrum` | `scrum.root`의 마지막 작업일 + 오늘 수집 시작 시점까지를 요약한다. `python3 -m lib.scrum`으로 최신 Git 메타데이터와 WIP를 한 번 수집한다. | `{scrum.outputDir}/{날짜}.md`. 같은 날은 덮어씀 |
 
-`/dig`·`/publish`는 결과를 `reports/dig/` 아래에 둔다. 날짜 디렉터리의 형제라서
-`--check-missed`, `--notify`, `/analyze`는 `reports/{날짜}/` 안만 보므로 이 파일들을
+학습 스킬은 설정된 `outputDir`(기본 `./reports`)를 사용한다.
+`/dig`·`/publish`는 결과를 `{outputDir}/dig/` 아래에 둔다. 날짜 디렉터리의 형제라서
+`--check-missed`, `--notify`, `/analyze`는 `{outputDir}/{날짜}/` 안만 보므로 이 파일들을
 리포트로 오인하거나 전송하지 않는다.
+같은 날짜·전체 저장소 이름의 구형·현재 리포트가 공존하면 분석 스킬은 현재 리포트를
+우선한다. `/dig`는 전체 저장소 이름으로 이력을 대조하고, `/publish`는 다음 dig 시작
+전까지만 기록하여 다른 프로젝트의 대화가 섞이지 않게 한다. `/analyze`에서 텔레그램이
+꺼져 있으면 전송을 정상적으로 생략한다.
 
 `/scrum`은 커밋 제목의 티켓 ID와 개별 `#time` 값을 그대로 복사하고, 긴 코멘트의
 개별 작업을 하위 불릿으로 보존한다. merge·버전 갱신 커밋은 제외하고, WIP만 있는
