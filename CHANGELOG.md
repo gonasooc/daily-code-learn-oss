@@ -6,6 +6,9 @@ All notable changes to Daily Code Learn are documented here.
 
 ### Changed
 
+- Collect `/scrum` evidence directly from the configured work root with `python3 -m lib.scrum`: fetch each repository once, omit diffs, and select the last reportable workday from Git instead of stale or missing Markdown reports. The default search covers 30 previous days and supports `--days` and historical `--date` replay.
+- Calculate standup time totals and unique WIP file counts in Python, retain WIP-only projects, distinguish nested repository identities, report missing or unsupported times, and stop before overwriting a summary when collection is incomplete. The skill preserves long comments, distinguishes today's commits, and specifies overflow accounting.
+- Validate optional scrum configuration in `--doctor` and the scrum collector without blocking ordinary learning report generation on scrum-only errors.
 - Exclude `refs/stash` from report and missed-day commit queries so temporary stash snapshots are not counted as completed work.
 - Handle non-decimal Unicode digit input in the missed-day picker without a traceback.
 

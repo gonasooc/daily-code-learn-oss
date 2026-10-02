@@ -95,15 +95,15 @@ def _read_config_file(config_path):
         raise ConfigError(f"설정 파일 읽기 실패: {config_path}: {e}") from e
 
 
-def _output_dir_error(output_dir):
+def _output_dir_error(output_dir, field_name="outputDir"):
     """outputDir에 필요한 읽기·쓰기·탐색 권한이 없으면 오류를 반환한다."""
     absolute_path = os.path.abspath(output_dir)
 
     if os.path.exists(absolute_path):
         if not os.path.isdir(absolute_path):
-            return f"outputDir가 디렉터리가 아닙니다: {output_dir}"
+            return f"{field_name}가 디렉터리가 아닙니다: {output_dir}"
         if not os.access(absolute_path, os.R_OK | os.W_OK | os.X_OK):
-            return f"outputDir에 읽기·쓰기·탐색 권한이 없습니다: {output_dir}"
+            return f"{field_name}에 읽기·쓰기·탐색 권한이 없습니다: {output_dir}"
         return None
 
     parent = os.path.dirname(absolute_path)
@@ -114,8 +114,59 @@ def _output_dir_error(output_dir):
         parent = next_parent
 
     if not os.path.isdir(parent) or not os.access(parent, os.W_OK | os.X_OK):
-        return f"outputDir을 생성할 수 없습니다: {output_dir}"
+        return f"{field_name}을 생성할 수 없습니다: {output_dir}"
     return None
+
+
+def validate_scrum_config(config, required=False):
+    """Validate optional scrum settings, requiring them for scrum collection."""
+    if not isinstance(config, dict):
+        return ["설정의 최상위 값은 JSON 객체여야 합니다."]
+    if "scrum" not in config:
+        if required:
+            return [
+                "scrum 설정이 없습니다. config/profiles.json에 "
+                "scrum.root와 scrum.outputDir을 설정하세요."
+            ]
+        return []
+
+    scrum = config["scrum"]
+    if not isinstance(scrum, dict):
+        return ["scrum은 JSON 객체여야 합니다."]
+
+    errors = []
+    root_name = scrum.get("root")
+    if not isinstance(root_name, str) or not root_name.strip():
+        errors.append("scrum.root는 비어 있지 않은 문자열이어야 합니다.")
+    else:
+        roots = config.get("roots", [])
+        selected_roots = [
+            root for root in roots
+            if isinstance(root, dict) and root.get("name") == root_name
+        ] if isinstance(roots, list) else []
+        if not selected_roots:
+            errors.append(
+                f"scrum.root에 해당하는 roots[].name이 없습니다: {root_name}"
+            )
+        elif len(selected_roots) > 1:
+            errors.append(
+                f"scrum.root에 해당하는 roots[].name이 중복됩니다: {root_name}"
+            )
+
+    output_dir = scrum.get("outputDir")
+    if not isinstance(output_dir, str) or not output_dir.strip():
+        errors.append("scrum.outputDir은 비어 있지 않은 문자열이어야 합니다.")
+    else:
+        placeholder_path = os.path.normpath(output_dir.strip())
+        if placeholder_path == "/path/to" or placeholder_path.startswith("/path/to/"):
+            errors.append(
+                "scrum.outputDir의 /path/to/ 예시 경로를 실제 저장 경로로 바꾸세요."
+            )
+        else:
+            error = _output_dir_error(output_dir, "scrum.outputDir")
+            if error:
+                errors.append(error)
+    return errors
 
 
 def _validate_nonempty_string_list(value, field_name, label):
@@ -370,6 +421,7 @@ def run_doctor():
         return 1
 
     validation_errors = validate_config(config)
+    validation_errors.extend(validate_scrum_config(config))
     has_error = bool(validation_errors) or git_error is not None
     for error in validation_errors:
         print(red(f"- {safe_terminal_text(error)}"))

@@ -188,9 +188,10 @@ python3 generate.py --doctor
 | `scrum.root` | 선택. `/scrum` 스킬이 요약할 `roots[].name` |
 | `scrum.outputDir` | 선택. `/scrum`이 `{날짜}.md`를 쓰는 디렉터리. 보통 `reports/` 밖의 노트 폴더 |
 
-`scrum`은 선택 항목이다. `/scrum` 스킬만 읽고 `--doctor`는 검증하지 않는다.
-블록이 없으면 스킬이 추측하지 않고 안내 후 멈춘다. 스크럼 요약은 학습 자료가
-아니라 업무 기록이므로 `scrum.outputDir`는 보통 `reports/` 밖을 가리킨다.
+`scrum`은 선택 항목이다. 설정이 있으면 `--doctor`가 root, 출력 경로, placeholder를
+검사한다. 잘못된 scrum 설정이 일반 학습 리포트 생성을 막지는 않는다. `/scrum` 실행 시
+블록이 없으면 설정 안내 후 멈춘다. 상대 `scrum.outputDir`는 실행 디렉터리 기준으로
+해석한다. 스크럼은 업무 기록이므로 출력 경로는 보통 학습 리포트 디렉터리 밖을 가리킨다.
 
 `roots[].path`는 저장소 자체 또는 저장소들을 담은 디렉터리를 가리킬 수 있다.
 어떤 디렉터리를 저장소로 인식하면 그 아래로는 더 탐색하지 않는다. 저장소가
@@ -348,16 +349,35 @@ Claude Code용(`.claude/skills/`)과 Codex용(`.agents/skills/`, agentskills.io 
 | `/analyze [날짜]` | 그날의 리포트 전부를 읽고 `prompts/analyze.md` 기준으로 학습 분석을 쓴다. 텔레그램이 켜져 있으면 전송한다. | Claude Code는 `reports/{날짜}/claude-analysis.md`, Codex는 `codex-analysis.md` |
 | `/dig <프로젝트> [날짜]` | 한 프로젝트의 그날 diff를 놓고 후속 대화를 시작한다. 같은 프로젝트의 지난 `/dig`에서 몰랐던 것을 먼저 복기하고, diff만으로 답이 안 나오면 저장소 코드를 읽고, 과거 분석 전체에서 그 프로젝트의 행을 시간축으로 참조한다. 인자 없이 실행하면 그날 리포트가 있는 프로젝트 목록만 보여준다. | `/publish` 전까지 없음 |
 | `/publish [프로젝트]` | `/dig` 대화를 마치며 몰랐던 것을 질문·한 줄 답·알게 된 것으로 남긴다. 트랜스크립트가 아니고, 질문이 없었으면 억지로 채우지 않는다. | `reports/dig/{root--repo}/{날짜}.md`. 같은 날 파일이 있으면 절을 추가 |
-| `/scrum` | `scrum.root` 작업 공간의 마지막 작업일 + 오늘 오전을 프로젝트별로 요약해 아침 스크럼 자료를 만든다. 먼저 `generate.py --check-missed`와 `generate.py`를 돌려 리포트를 최신화한다. | `{scrum.outputDir}/{날짜}.md`. 같은 날은 덮어씀 |
+| `/scrum` | `scrum.root`의 마지막 작업일 + 오늘 수집 시작 시점까지를 요약한다. `python3 -m lib.scrum`으로 최신 Git 메타데이터와 WIP를 한 번 수집한다. | `{scrum.outputDir}/{날짜}.md`. 같은 날은 덮어씀 |
 
 `/dig`·`/publish`는 결과를 `reports/dig/` 아래에 둔다. 날짜 디렉터리의 형제라서
 `--check-missed`, `--notify`, `/analyze`는 `reports/{날짜}/` 안만 보므로 이 파일들을
 리포트로 오인하거나 전송하지 않는다.
 
-`/scrum`은 학습 노트가 아니라 업무 보고다. 커밋 제목의 티켓 ID와 `#time` 값을 글자
-그대로 복사하고, 긴 커밋 코멘트는 한 문장으로 줄이고, merge·버전 범프 커밋은 빼고,
-그것만 있던 저장소는 절을 만들지 않는다. 먼저 `config/profiles.json`에 `scrum.root`와
-`scrum.outputDir`를 설정한다.
+`/scrum`은 커밋 제목의 티켓 ID와 개별 `#time` 값을 그대로 복사하고, 긴 코멘트의
+개별 작업을 하위 불릿으로 보존한다. merge·버전 갱신 커밋은 제외하고, WIP만 있는
+프로젝트는 포함한다. 중첩 저장소는 전체 상대 경로로 구분하며, 기록된 시간 합계와
+시간 미기록·확인 필요 건수를 따로 표시한다. 먼저 `config/profiles.json`에
+`scrum.root`와 `scrum.outputDir`를 설정한다.
+
+수집기는 최근 30일 중 보고할 커밋이 있는 가장 최근 날짜를 Git에서 직접 찾는다.
+오래된 리포트나 WIP 스냅샷, 다른 root의 리포트가 날짜 선택에 영향을 주지 않는다.
+대상 저장소별 fetch는 한 번이고 diff는 수집하지 않는다. 이전 작업일이 없으면 오늘
+자료만 정리할 수 있다. 수집이 불완전하면 스킬이 기존 스크럼을 덮어쓰기 전에 멈춘다.
+
+```bash
+# 리포트 저장·알림 전송 없이 정형 근거 확인
+python3 -m lib.scrum
+
+# 이전 작업일 탐색 범위 확대 / 과거 날짜 재현(WIP 제외)
+python3 -m lib.scrum --days 90
+python3 -m lib.scrum --date 2026-09-14
+```
+
+수집기는 stdout에 JSON, stderr에 진단을 출력한다. 스크럼 문서는 이 근거를 읽은
+스킬이 저장한다. 과거 날짜 재현은 현재 Git에서 접근 가능한 이력을 기준으로 한다.
+`/analyze`·`/dig`용 학습 리포트는 별도로 `generate.py`로 생성한다.
 
 ### 프롬프트 직접 사용
 
@@ -543,6 +563,7 @@ daily-code-learn/
     parallel.py               # 저장소 병렬 실행 공용 헬퍼
     progress.py               # 스레드 안전 터미널 진행 표시
     missed_days.py            # 누락된 학습일 점검
+    scrum.py                  # 스크럼용 커밋 메타데이터·WIP 수집
     renderer.py               # 마크다운 생성 + 파일 저장
     notifier.py               # 텔레그램 알림 전송
   .claude/skills/             # Claude Code 스킬: analyze, dig, publish, scrum

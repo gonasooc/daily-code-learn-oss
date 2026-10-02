@@ -235,10 +235,12 @@ explicit project-specific exclude.
 Relative `roots[].path` and `outputDir` values are resolved from the process's
 current working directory.
 
-`scrum` is optional. Only the `/scrum` skill reads it, and `--doctor` does not
-validate it; when the block is missing the skill stops with a hint instead of
-guessing. Standup summaries are work records rather than learning material, so
-`scrum.outputDir` normally points outside `reports/`.
+`scrum` is optional. When present, `--doctor` validates its root and output
+directory, including placeholder paths. Invalid scrum settings do not block
+ordinary report generation. The `/scrum` skill requires this block and stops
+with a setup hint when it is missing. Relative `scrum.outputDir` paths are
+resolved from the current working directory. Standup summaries are work records,
+so `scrum.outputDir` normally points outside the learning report directory.
 
 ## When Reports Are Generated
 
@@ -356,16 +358,38 @@ invoke them by name. Codex uses a `$` prefix (`$analyze`, `$dig`, and so on).
 | `/analyze [date]` | Reads every report for one day and writes a learning analysis following `prompts/analyze.md`. Sends the result through Telegram when enabled. | `reports/{date}/claude-analysis.md` from Claude Code, `codex-analysis.md` from Codex |
 | `/dig <project> [date]` | Opens a follow-up conversation about one project's diff for that day. It first recalls what you did not know from earlier `/dig` sessions on the same project, reads the repository's source when the diff alone cannot answer a question, and cross-references the project's rows across every past analysis. Without arguments it lists the projects that have a report for the day. | Nothing until you run `/publish` |
 | `/publish [project]` | Closes a `/dig` conversation by recording what you did not know as question, one-line answer, and takeaway. It is not a transcript, and it does not invent entries when you asked nothing. | `reports/dig/{root--repo}/{date}.md`, appended when the file already exists |
-| `/scrum` | Summarizes the last working day plus this morning for the `scrum.root` workspace, grouped by project, for a morning standup. Runs `generate.py --check-missed` and `generate.py` first so the reports are current. | `{scrum.outputDir}/{date}.md`, overwritten on the same day |
+| `/scrum` | Summarizes the last working day plus today up to the collection start time for `scrum.root`. Uses `python3 -m lib.scrum` to collect current Git metadata and WIP once. | `{scrum.outputDir}/{date}.md`, overwritten on the same day |
 
 `/dig` and `/publish` keep their output under `reports/dig/`, beside the dated
 report directories. `--check-missed`, `--notify`, and `/analyze` only look inside
 `reports/{date}/`, so those files are never mistaken for reports or sent anywhere.
 
-`/scrum` is a work report, not a learning note. It copies ticket IDs and `#time`
-values from commit titles verbatim, condenses long commit comments to one
-sentence, drops merge and version-bump commits, and omits a repository that had
-only those. Set `scrum.root` and `scrum.outputDir` in `config/profiles.json` first.
+`/scrum` copies ticket IDs and individual `#time` values from commit titles,
+keeps long comments as sub-bullets, and drops merge and version-bump commits.
+It retains WIP-only projects and distinguishes nested repositories by full
+relative path. Known times are summed separately from missing or unsupported
+times. Set `scrum.root` and `scrum.outputDir` in `config/profiles.json` first.
+
+The collector selects the most recent day with a reportable commit in the
+previous 30 days directly from Git. Cached reports, stale WIP snapshots, and
+reports from other roots do not affect that choice. It fetches each selected
+repository once and collects no diffs. If no previous workday is found, the
+skill can summarize today's activity alone. An incomplete collection stops the
+skill before it overwrites a summary.
+
+```bash
+# Inspect the structured evidence without writing reports or sending messages.
+python3 -m lib.scrum
+
+# Extend the prior-workday search, or replay a historical date without WIP.
+python3 -m lib.scrum --days 90
+python3 -m lib.scrum --date 2026-09-14
+```
+
+The helper prints JSON to stdout and diagnostics to stderr. It does not save
+the standup document; the skill writes the summary from this evidence. Historical
+replays use the currently reachable Git history. Learning reports for `/analyze`
+and `/dig` are generated separately with `generate.py`.
 
 ### Without skills
 
@@ -553,6 +577,7 @@ daily-code-learn/
     parallel.py               # shared concurrent repository runner
     progress.py               # thread-safe terminal progress display
     missed_days.py            # missed report day detection
+    scrum.py                  # metadata-only standup evidence collection
     renderer.py               # Markdown rendering and file writing
     notifier.py               # Telegram notification sending
   .claude/skills/             # Claude Code skills: analyze, dig, publish, scrum

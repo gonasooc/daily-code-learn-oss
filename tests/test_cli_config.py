@@ -220,6 +220,100 @@ class ConfigCliTests(unittest.TestCase):
 
             self.assertEqual(config.validate_config(value), [])
 
+    def test_scrum_config_is_optional_until_scrum_is_requested(self):
+        self.assertEqual(config.validate_scrum_config({}), [])
+        errors = config.validate_scrum_config({}, required=True)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("scrum.root와 scrum.outputDir", errors[0])
+
+    def test_scrum_config_rejects_malformed_sections_and_fields(self):
+        for value in (None, [], "work"):
+            with self.subTest(value=value):
+                self.assertIn(
+                    "scrum은 JSON 객체",
+                    config.validate_scrum_config({"scrum": value})[0],
+                )
+        self.assertIn("최상위", config.validate_scrum_config([])[0])
+        for value in ({}, {"root": " ", "outputDir": ""}, {"root": 1, "outputDir": []}):
+            with self.subTest(value=value):
+                errors = "\n".join(config.validate_scrum_config({"scrum": value}))
+                self.assertIn("scrum.root는 비어 있지 않은 문자열", errors)
+                self.assertIn("scrum.outputDir은 비어 있지 않은 문자열", errors)
+
+    def test_scrum_config_requires_an_existing_unique_root_name(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            value = {"scrum": {"root": "work", "outputDir": tmp_dir}}
+            for roots in ([], None, ["work"], [{"name": "personal"}]):
+                with self.subTest(roots=roots):
+                    value["roots"] = roots
+                    errors = "\n".join(config.validate_scrum_config(value))
+                    self.assertIn("roots[].name이 없습니다: work", errors)
+            value["roots"] = [{"name": "work"}, {"name": "work"}]
+            self.assertIn(
+                "roots[].name이 중복됩니다",
+                "\n".join(config.validate_scrum_config(value)),
+            )
+
+    def test_scrum_config_checks_output_directory_without_creating_it(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            new_output = os.path.join(tmp_dir, "notes", "scrum")
+            value = {
+                "roots": [{"name": "work"}],
+                "scrum": {"root": "work", "outputDir": new_output},
+            }
+            self.assertEqual(config.validate_scrum_config(value, required=True), [])
+            self.assertFalse(os.path.exists(new_output))
+
+            output_file = os.path.join(tmp_dir, "note.md")
+            with open(output_file, "w", encoding="utf-8") as file:
+                file.write("existing note")
+            for output_dir, expected in (
+                (output_file, "scrum.outputDir가 디렉터리가 아닙니다"),
+                (os.path.join(output_file, "scrum"), "scrum.outputDir을 생성할 수 없습니다"),
+                ("/path/to/notes/scrum", "예시 경로를 실제 저장 경로로"),
+            ):
+                with self.subTest(output_dir=output_dir):
+                    value["scrum"]["outputDir"] = output_dir
+                    self.assertIn(expected, "\n".join(config.validate_scrum_config(value)))
+
+            value["scrum"]["outputDir"] = tmp_dir
+            with patch.object(config.os, "access", return_value=False):
+                self.assertIn(
+                    "scrum.outputDir에 읽기·쓰기·탐색 권한이 없습니다",
+                    "\n".join(config.validate_scrum_config(value)),
+                )
+
+    def test_invalid_optional_scrum_does_not_block_regular_config_loading(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = os.path.join(tmp_dir, "profiles.json")
+            value = self._valid_config(tmp_dir, os.path.join(tmp_dir, "reports"))
+            value["scrum"] = {"root": "missing", "outputDir": "/path/to/notes/scrum"}
+            with open(config_path, "w", encoding="utf-8") as file:
+                json.dump(value, file)
+            with patch.object(config, "CONFIG_PATH", config_path), \
+                    patch.object(config, "_load_env"):
+                loaded = config.load_config()
+            self.assertEqual(loaded["scrum"], value["scrum"])
+
+    def test_doctor_rejects_invalid_optional_scrum(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repository = os.path.join(tmp_dir, "sample-app")
+            os.makedirs(repository)
+            subprocess.run(["git", "init"], cwd=repository, check=True, capture_output=True)
+            config_path = os.path.join(tmp_dir, "profiles.json")
+            value = self._valid_config(tmp_dir, os.path.join(tmp_dir, "reports"))
+            value["scrum"] = {"root": "missing", "outputDir": "/path/to/notes/scrum"}
+            with open(config_path, "w", encoding="utf-8") as file:
+                json.dump(value, file)
+            stdout = io.StringIO()
+            with patch.object(config, "CONFIG_PATH", config_path), \
+                    patch.object(config, "_load_env"), \
+                    patch.object(config, "_check_git", return_value=("git version 2.37.0", None)), \
+                    redirect_stdout(stdout):
+                self.assertEqual(config.run_doctor(), 1)
+            self.assertIn("scrum.root에 해당하는 roots[].name이 없습니다", stdout.getvalue())
+            self.assertIn("scrum.outputDir의 /path/to/ 예시 경로", stdout.getvalue())
+
     def test_validate_config_reports_schema_and_value_errors(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             invalid = {
