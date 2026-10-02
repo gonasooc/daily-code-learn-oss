@@ -249,6 +249,30 @@ class MissedDaysReportDetectionTests(unittest.TestCase):
         self.assertNotIn("\x1b", stdout.getvalue())
         self.assertIn(r"work/team\nforged\x1b[2J", stdout.getvalue())
 
+    def test_nondecimal_unicode_digit_is_rejected_then_valid_selection_recovers(self):
+        entry = {
+            "date": "2026-06-28",
+            "project_names": ["work/sample-app"],
+            "project_count": 1,
+            "commit_count": 1,
+            "has_report": False,
+        }
+        answers = iter(["²", "①", "1"])
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            selected = pick_missed_day(
+                {
+                    "start_date": "2026-06-28",
+                    "end_date": "2026-06-28",
+                    "activity_days": [entry],
+                    "missed_days": [entry],
+                },
+                1,
+                input_func=lambda _prompt: next(answers),
+            )
+        self.assertEqual(selected, "2026-06-28")
+        self.assertEqual(stdout.getvalue().count("잘못된 입력입니다"), 2)
+
 
 class MissedDaysErrorHandlingTests(unittest.TestCase):
     class _Progress:

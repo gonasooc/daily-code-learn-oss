@@ -268,7 +268,7 @@ def pick_missed_day(result, days, input_func=input, max_display=10):
             print(dim("취소했습니다."))
             return None
 
-        if raw.isdigit():
+        if raw.isdecimal():
             # Python 3.11+ intentionally rejects extremely long decimal
             # strings.  Reject them before int() so interactive input can
             # never turn into a traceback.

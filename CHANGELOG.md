@@ -7,6 +7,7 @@ All notable changes to Daily Code Learn are documented here.
 ### Changed
 
 - Exclude `refs/stash` from report and missed-day commit queries so temporary stash snapshots are not counted as completed work.
+- Handle non-decimal Unicode digit input in the missed-day picker without a traceback.
 
 ## v0.2.2 - 2026-09-16
 
