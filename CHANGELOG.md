@@ -4,6 +4,8 @@ All notable changes to Daily Code Learn are documented here.
 
 ## Unreleased
 
+## v0.3.0 - 2026-10-02
+
 ### Changed
 
 - Collect `/scrum` evidence directly from the configured work root with `python3 -m lib.scrum`: fetch each repository once, omit diffs, and select the last reportable workday from Git instead of stale or missing Markdown reports. The default search covers 30 previous days and supports `--days` and historical `--date` replay.
